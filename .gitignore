@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+backend/venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Database
+*.db
+
+# Cache
+.cache/
+chroma/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+
+# Build
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Coverage
+.coverage
+htmlcov/
+# Next.js
+frontend/.next/
+.next/
+
+# Node modules
+node_modules/
+
+# Environment files
+.env
+.env.local
+
+# Python
+venv/
+backend/venv/
+__pycache__/
+*.pyc
+frontend/node_modules/
