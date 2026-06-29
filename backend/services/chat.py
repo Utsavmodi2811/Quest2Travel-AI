@@ -125,7 +125,7 @@ class ChatService:
                     "refundable":  f.is_refundable,
                     "is_mock":     f.is_mock,
                 }
-                for f in results.flights[:5]
+                for f in results.flights
             ]
         if results.trains:
             d["trains"] = [
@@ -139,7 +139,7 @@ class ChatService:
                                   for c in t.classes[:4]],
                     "is_mock":   t.is_mock,
                 }
-                for t in results.trains[:5]
+                for t in results.trains
             ]
         if results.buses:
             d["buses"] = [

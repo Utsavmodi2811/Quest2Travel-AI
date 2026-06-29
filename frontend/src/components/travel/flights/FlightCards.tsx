@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plane, Clock, Luggage, RefreshCw, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react';
+import { Plane, Clock, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react';
 import { FlightResult } from '@/types';
 import { formatPrice, formatTime } from '@/lib/utils';
 
@@ -106,12 +106,12 @@ export function FlightCards({ flights }: Props) {
                 ))}
 
                 <div className="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400 pt-2 border-t border-gray-100 dark:border-gray-700">
-                  <span className="flex items-center gap-1"><Luggage size={11} />{f.baggage_allowance}</span>
-                  <span className="flex items-center gap-1"><Clock size={11} />{f.total_duration}</span>
-                  {f.is_refundable
-                    ? <span className="flex items-center gap-1 text-green-500"><RefreshCw size={11} />Refundable</span>
-                    : <span className="text-red-400">Non-refundable</span>
-                  }
+
+                  <span className="flex items-center gap-1">
+                    <Clock size={11} />
+                    {f.total_duration}
+                  </span>
+
                 </div>
 
                 <button className="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors">

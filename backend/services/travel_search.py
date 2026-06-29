@@ -154,9 +154,11 @@ class TravelSearchService:
                 )
             )
         ]
+        print("Before sorting =", len(flights))
 
         flights = self._sort_flights(flights)
-        flights = flights[:5]
+
+        print("After sorting =", len(flights))
 
         logger.info(
             f"Found {len(flights)} flights for "
@@ -175,6 +177,7 @@ class TravelSearchService:
             mock_reason=MOCK_DISCLAIMER if is_mock else None,
         )
         await self._store(result)
+        print("Returning =", len(flights))
         return result
 
     # ── Trains ────────────────────────────────────────────────────────────────
