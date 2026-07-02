@@ -1,5 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from pymongo import IndexModel, ASCENDING, DESCENDING, TEXT
+from pymongo import IndexModel, ASCENDING, DESCENDING
 from typing import Optional
 import logging
 
@@ -19,11 +19,16 @@ async def connect_db() -> None:
             serverSelectionTimeoutMS=5000,
             connectTimeoutMS=5000,
         )
+
         # Verify connection
         await _client.admin.command("ping")
+
         _db = _client[settings.MONGODB_DB_NAME]
+
         await _create_indexes()
+
         logger.info(f"Connected to MongoDB: {settings.MONGODB_DB_NAME}")
+
     except Exception as e:
         logger.error(f"MongoDB connection failed: {e}")
         raise
@@ -31,6 +36,7 @@ async def connect_db() -> None:
 
 async def disconnect_db() -> None:
     global _client
+
     if _client:
         _client.close()
         logger.info("MongoDB disconnected")
@@ -59,12 +65,38 @@ async def _create_indexes() -> None:
         IndexModel([("role", ASCENDING)]),
     ])
 
+    # users collection (new)
+    await db.users.create_indexes([
+        IndexModel([("user_id", ASCENDING)], unique=True),
+        IndexModel([("company_id", ASCENDING)]),
+    ])
+
+    # companies collection (new)
+    await db.companies.create_indexes([
+        IndexModel([("company_id", ASCENDING)], unique=True),
+        IndexModel([("name", ASCENDING)]),
+    ])
+
+    # meetings collection (new)
+    await db.meetings.create_indexes([
+        IndexModel([("session_id", ASCENDING)]),
+        IndexModel([("created_at", DESCENDING)]),
+    ])
+
+    # journeys collection (new)
+    await db.journeys.create_indexes([
+        IndexModel([("session_id", ASCENDING)]),
+        IndexModel([("created_at", DESCENDING)]),
+    ])
+
     # travel_searches collection
     await db.travel_searches.create_indexes([
         IndexModel([("session_id", ASCENDING)]),
         IndexModel([("search_type", ASCENDING)]),
         IndexModel([("created_at", DESCENDING)]),
         IndexModel([("origin", ASCENDING), ("destination", ASCENDING)]),
+        # Added from new version
+        IndexModel([("session_id", ASCENDING), ("search_type", ASCENDING)]),
     ])
 
     # cached_results collection

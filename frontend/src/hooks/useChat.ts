@@ -1,13 +1,11 @@
+'use client';
+
 import { useCallback } from 'react';
 import { chatApi } from '@/lib/api';
 import { useChatStore } from '@/store/chat';
 import { UIMessage } from '@/types';
+import { tempId } from '@/lib/utils'; // Moved from inline helper
 import toast from 'react-hot-toast';
-
-let _tempIdCounter = 0;
-function tempId() {
-  return `temp_${Date.now()}_${++_tempIdCounter}`;
-}
 
 export function useChat() {
   const {
@@ -28,7 +26,7 @@ export function useChat() {
     async (text: string) => {
       if (!text.trim() || isLoading) return;
 
-      const userTempId  = tempId();
+      const userTempId = tempId();
       const assistantTempId = tempId();
 
       // Optimistic user bubble
@@ -40,6 +38,7 @@ export function useChat() {
         created_at: new Date().toISOString(),
         status: 'sending',
       };
+
       addMessage(userMsg);
       setLoading(true);
 
@@ -59,29 +58,49 @@ export function useChat() {
           message: text,
         });
 
-        if (!sessionId) setSessionId(response.session_id);
+        if (!sessionId) {
+          setSessionId(response.session_id);
+        }
 
+        // Mark user message as sent
         updateMessage(userTempId, {
           status: 'sent',
           session_id: response.session_id,
         });
 
+        // Replace typing indicator with assistant response
         updateMessage(assistantTempId, {
           message_id: response.message_id,
           session_id: response.session_id,
           content: response.reply,
           travel_results: response.travel_results ?? undefined,
+
+          // ✅ New fields
+          journey_plan: response.journey_plan ?? undefined,
+          intent_type: response.intent_type,
+          permission_denied: response.permission_denied,
+          denied_service: response.denied_service,
+
           suggestions: response.suggestions,
           isStreaming: false,
           status: 'sent',
         });
 
-        if (response.travel_context) setTravelContext(response.travel_context);
-        if (response.suggestions?.length) setSuggestions(response.suggestions);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Something went wrong';
+        if (response.travel_context) {
+          setTravelContext(response.travel_context);
+        }
 
-        updateMessage(userTempId,      { status: 'error' });
+        if (response.suggestions?.length) {
+          setSuggestions(response.suggestions);
+        }
+      } catch (err: unknown) {
+        const msg =
+          err instanceof Error ? err.message : 'Something went wrong';
+
+        updateMessage(userTempId, {
+          status: 'error',
+        });
+
         updateMessage(assistantTempId, {
           content: `Sorry, I ran into an issue: ${msg}. Please try again.`,
           isStreaming: false,
@@ -94,12 +113,23 @@ export function useChat() {
       }
     },
     [
-      sessionId, isLoading,
-      addMessage, updateMessage,
-      setSessionId, setLoading,
-      setSuggestions, setTravelContext,
+      sessionId,
+      isLoading,
+      addMessage,
+      updateMessage,
+      setSessionId,
+      setLoading,
+      setSuggestions,
+      setTravelContext,
     ]
   );
 
-  return { sendMessage, messages, isLoading, suggestions, travelContext, sessionId };
+  return {
+    sendMessage,
+    messages,
+    isLoading,
+    suggestions,
+    travelContext,
+    sessionId,
+  };
 }

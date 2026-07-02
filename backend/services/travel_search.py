@@ -1,325 +1,899 @@
 """
-Travel Search Orchestration Service.
-Coordinates: context → cache → geocoding → API search → filtering → sorting → storage.
+Enterprise Travel Search Service
 
-Budget/stars/class filters are STRICT: if a user asks for "hotels under ₹5000"
-and zero hotels match, we return zero hotels (not silently fall back to
-everything). The chat layer / UI is responsible for telling the user
-"no results matched your filter" in that case.
+Responsibilities
+----------------
+Context
+    ↓
+Cache
+    ↓
+Geocoding
+    ↓
+Travel Provider APIs
+    ↓
+Filtering
+    ↓
+Ranking
+    ↓
+Storage
 """
 
-import logging
 import asyncio
 import hashlib
-from typing import Optional, List
+import json
+import logging
+
 from datetime import datetime, timedelta
+from typing import List, Optional
+
+from config.settings import settings
+from database.connection import get_db
 
 from models.travel import (
-    TravelContext, TravelMode, TravelSearchResult,
-    FlightResult, HotelResult, TrainResult, BusResult, CarResult, CabinClass,
+    TravelContext,
+    TravelMode,
+    TravelSearchResult,
+    FlightResult,
+    HotelResult,
+    TrainResult,
+    BusResult,
+    CarResult,
 )
-from services.geocoding import geocoding_service
-from api_clients.flights import flights_client
-from api_clients.travel import hotels_client, trains_client, buses_client, cars_client
-from database.connection import get_db
+
+from api_clients.all_clients import (
+    flights_client,
+    hotels_client,
+    trains_client,
+    buses_client,
+    cars_client,
+)
+
 from utils.fallback import MOCK_DISCLAIMER
-from config.settings import settings
+from utils.india_cities import get_city_coords
 
 logger = logging.getLogger(__name__)
 
 
 class TravelSearchService:
 
-    async def search(self, session_id: str, context: TravelContext) -> TravelSearchResult:
+    """
+    Master Travel Search Orchestrator
+
+    Responsible for
+
+    • Flights
+    • Hotels
+    • Trains
+    • Bus
+    • Cars
+
+    Also responsible for
+
+    • Cache
+    • Filters
+    • Ranking
+    • Storage
+    """
+
+    async def search(
+        self,
+        session_id: str,
+        context: TravelContext,
+    ) -> TravelSearchResult:
+
         mode = context.mode
+
         if mode == TravelMode.FLIGHT:
-            return await self._search_flights(session_id, context)
+            return await self._flights(session_id, context)
+
         elif mode == TravelMode.TRAIN:
-            return await self._search_trains(session_id, context)
+            return await self._trains(session_id, context)
+
         elif mode == TravelMode.BUS:
-            return await self._search_buses(session_id, context)
+            return await self._buses(session_id, context)
+
         elif mode == TravelMode.HOTEL:
-            return await self._search_hotels(session_id, context)
+            return await self._hotels(session_id, context)
+
         elif mode == TravelMode.CAR:
-            return await self._search_cars(session_id, context)
+            return await self._cars(session_id, context)
+
         else:
-            return await self._search_all(session_id, context)
+            return await self._all(session_id, context)
 
-    # ── All modes ─────────────────────────────────────────────────────────────
+    # ==========================================================
+    # Search Everything
+    # ==========================================================
 
-    async def _search_all(self, session_id: str, context: TravelContext) -> TravelSearchResult:
-        travel_date = context.travel_date or datetime.now().strftime("%Y-%m-%d")
+    async def _all(
+        self,
+        session_id: str,
+        ctx: TravelContext,
+    ) -> TravelSearchResult:
 
-        flights_task = flights_client.search(
-            origin=context.origin or "",
-            destination=context.destination or "",
-            travel_date=travel_date,
-            cabin_class=context.cabin_class.value if context.cabin_class else "economy",
+        logger.info(
+            "Searching all travel modes %s → %s",
+            ctx.origin,
+            ctx.destination,
         )
-        trains_task = trains_client.search(
-            origin=context.origin or "",
-            destination=context.destination or "",
-            travel_date=travel_date,
+
+        travel_date = (
+            ctx.travel_date
+            or datetime.now().strftime("%Y-%m-%d")
         )
-        buses_task = buses_client.search(
-            origin=context.origin or "",
-            destination=context.destination or "",
-            travel_date=travel_date,
+
+        cabin = (
+            ctx.cabin_class.value
+            if ctx.cabin_class
+            else "economy"
         )
+
+        tasks = [
+
+            flights_client.search(
+                ctx.origin or "",
+                ctx.destination or "",
+                travel_date,
+                cabin_class=cabin,
+                passengers=ctx.passengers,
+            ),
+
+            trains_client.search(
+                ctx.origin or "",
+                ctx.destination or "",
+                travel_date,
+            ),
+
+            buses_client.search(
+                ctx.origin or "",
+                ctx.destination or "",
+                travel_date,
+            ),
+
+        ]
 
         flights, trains, buses = await asyncio.gather(
-            flights_task, trains_task, buses_task,
+            *tasks,
             return_exceptions=True,
         )
 
         if isinstance(flights, Exception):
-            logger.warning(f"Flights failed in search_all: {flights}")
+            logger.exception(flights)
             flights = []
+
         if isinstance(trains, Exception):
-            logger.warning(f"Trains failed in search_all: {trains}")
+            logger.exception(trains)
             trains = []
+
         if isinstance(buses, Exception):
-            logger.warning(f"Buses failed in search_all: {buses}")
+            logger.exception(buses)
             buses = []
 
-        flights = self._filter_flights(flights or [], context)
-        trains  = self._filter_trains(trains or [], context)
-        buses   = self._filter_buses(buses or [], context)
-
-        logger.info(
-            f"search_all: found {len(flights)} flights, "
-            f"{len(trains)} trains, {len(buses)} buses "
-            f"for {context.origin} → {context.destination}"
+        flights = self._filter_flights(
+            flights or [],
+            ctx,
         )
 
-        all_mock = (
-            bool(flights) and all(getattr(f, "is_mock", False) for f in flights) and
-            bool(trains)  and all(getattr(t, "is_mock", False) for t in trains)  and
-            bool(buses)   and all(getattr(b, "is_mock", False) for b in buses)
+        trains = self._filter_trains(
+            trains or [],
+            ctx,
         )
 
-        result = TravelSearchResult(
-            session_id=session_id,
-            search_type=TravelMode.GENERAL,
-            origin=context.origin,
-            destination=context.destination,
-            travel_date=travel_date,
-            flights=flights or None,
-            trains=trains or None,
-            buses=buses or None,
-            is_partial_mock=all_mock,
-            mock_reason=MOCK_DISCLAIMER if all_mock else None,
-        )
-        await self._store(result)
-        return result
-
-    # ── Flights ───────────────────────────────────────────────────────────────
-
-    async def _search_flights(self, session_id: str, context: TravelContext) -> TravelSearchResult:
-        travel_date = context.travel_date or datetime.now().strftime("%Y-%m-%d")
-        cabin = context.cabin_class.value if context.cabin_class else "economy"
-
-        # cache_key = self._result_cache_key(
-        #     "flights", context.origin, context.destination, travel_date, cabin
-        # )
-
-        # cached = await self._read_result_cache(cache_key)
-
-        # if cached is not None:
-        #     flights = cached
-        #     logger.info(
-        #         f"Flight cache HIT: {context.origin}→{context.destination} ({travel_date})"
-        #     )
-        # else:
-        flights = await flights_client.search(
-            origin=context.origin or "",
-            destination=context.destination or "",
-            travel_date=travel_date,
-            passengers=context.passengers,
-            cabin_class=cabin,
+        buses = self._filter_buses(
+            buses or [],
+            ctx,
         )
 
-        # if flights and not all(f.is_mock for f in flights):
-        #     await self._write_result_cache(cache_key, flights)
-
-        flights = self._filter_flights(flights, context)
-
-        # remove terrible itineraries
-        flights = [
-            f for f in flights
-            if (
-                f.stops <= 1
-                and (
-                    int(f.total_duration.split("h")[0]) <= 8
-                )
-            )
-        ]
-        print("Before sorting =", len(flights))
+        #
+        # Enterprise Ranking
+        #
 
         flights = self._sort_flights(flights)
 
-        print("After sorting =", len(flights))
-
-        logger.info(
-            f"Found {len(flights)} flights for "
-            f"{context.origin} → {context.destination} on {travel_date}"
-        )
-
-        is_mock = bool(flights) and all(f.is_mock for f in flights)
-        result = TravelSearchResult(
-            session_id=session_id,
-            search_type=TravelMode.FLIGHT,
-            origin=context.origin,
-            destination=context.destination,
-            travel_date=travel_date,
-            flights=flights,
-            is_partial_mock=is_mock,
-            mock_reason=MOCK_DISCLAIMER if is_mock else None,
-        )
-        await self._store(result)
-        print("Returning =", len(flights))
-        return result
-
-    # ── Trains ────────────────────────────────────────────────────────────────
-
-    async def _search_trains(self, session_id: str, context: TravelContext) -> TravelSearchResult:
-        travel_date = context.travel_date or datetime.now().strftime("%Y-%m-%d")
-
-        cache_key = self._result_cache_key("trains", context.origin, context.destination, travel_date)
-        cached = await self._read_result_cache(cache_key)
-        if cached is not None:
-            trains = cached
-            logger.info(f"Train cache HIT: {context.origin}→{context.destination} ({travel_date})")
-        else:
-            trains = await trains_client.search(
-                origin=context.origin or "",
-                destination=context.destination or "",
-                travel_date=travel_date,
-            )
-            if trains and not all(t.is_mock for t in trains):
-                await self._write_result_cache(cache_key, trains)
-
-        trains = self._filter_trains(trains, context)
         trains = self._sort_trains(trains)
 
-        logger.info(f"Found {len(trains)} trains for {context.origin} → {context.destination}")
+        buses = sorted(
+            buses,
+            key=lambda x: x.price,
+        )
 
-        is_mock = bool(trains) and all(t.is_mock for t in trains)
+        flights = flights[:10]
+        trains = trains[:10]
+        buses = buses[:10]
+
+        logger.info(
+            "Results | Flights=%d Trains=%d Buses=%d",
+            len(flights),
+            len(trains),
+            len(buses),
+        )
+
+        all_mock = (
+
+            bool(flights)
+            and all(f.is_mock for f in flights)
+
+            and
+
+            bool(trains)
+            and all(t.is_mock for t in trains)
+
+            and
+
+            bool(buses)
+            and all(b.is_mock for b in buses)
+
+        )
+
+        result = TravelSearchResult(
+
+            session_id=session_id,
+
+            search_type=TravelMode.GENERAL,
+
+            origin=ctx.origin,
+
+            destination=ctx.destination,
+
+            travel_date=travel_date,
+
+            flights=flights or None,
+
+            trains=trains or None,
+
+            buses=buses or None,
+
+            is_partial_mock=all_mock,
+
+            mock_reason=(
+                MOCK_DISCLAIMER
+                if all_mock
+                else None
+            ),
+        )
+
+        await self._store(result)
+
+        return result
+
+    # ==========================================================
+    # Flights
+    # ==========================================================
+
+    async def _flights(
+        self,
+        session_id: str,
+        ctx: TravelContext,
+    ) -> TravelSearchResult:
+
+        travel_date = (
+            ctx.travel_date
+            or datetime.now().strftime("%Y-%m-%d")
+        )
+        print("\n================ FLIGHT SEARCH =================")
+        print("Origin      :", ctx.origin)
+        print("Destination :", ctx.destination)
+        print("Travel Date :", travel_date)
+        print("Passengers  :", ctx.passengers)
+        print("===============================================\n")
+
+        cabin = (
+            ctx.cabin_class.value
+            if ctx.cabin_class
+            else "economy"
+        )
+
+        cache_key = self._ckey(
+            "flights",
+            ctx.origin,
+            ctx.destination,
+            travel_date,
+            cabin,
+            ctx.passengers,
+        )
+
+        logger.info(
+            "Flight Search %s → %s (%s)",
+            ctx.origin,
+            ctx.destination,
+            travel_date,
+        )
+
+        flights = await self._read_cache(
+            cache_key,
+            "flights",
+        )
+
+        if flights is None:
+
+            logger.info("Flight cache MISS")
+            print("Calling flights_client.search()...")
+            flights = await flights_client.search(
+
+                origin=ctx.origin or "",
+
+                destination=ctx.destination or "",
+
+                travel_date=travel_date,
+
+                passengers=ctx.passengers,
+
+                cabin_class=cabin,
+
+            )
+            print("Flights received from API:", len(flights))
+
+            await self._write_cache(
+                cache_key,
+                flights,
+            )
+
+        else:
+
+            logger.info("Flight cache HIT")
+
+        ####################################################
+        # Apply User Filters
+        ####################################################
+
+        flights = self._filter_flights(
+            flights,
+            ctx,
+        )
+
+        ####################################################
+        # Meeting Planner Filters
+        ####################################################
+
+        # if ctx.required_arrival_by and flights:
+
+        #     try:
+
+        #         from services.meeting_planner import meeting_planner
+
+        #         flights = meeting_planner.filter_flights_by_arrival(
+
+        #             flights,
+
+        #             ctx.required_arrival_by,
+
+        #         )
+
+        #     except Exception as e:
+
+        #         logger.warning(
+        #             f"Arrival filter failed: {e}"
+        #         )
+
+        # if ctx.required_departure_after and flights:
+
+        #     try:
+
+        #         from services.meeting_planner import meeting_planner
+
+        #         flights = meeting_planner.filter_flights_by_departure(
+
+        #             flights,
+
+        #             ctx.required_departure_after,
+
+        #         )
+
+        #     except Exception as e:
+
+        #         logger.warning(
+        #             f"Departure filter failed: {e}"
+        #         )
+
+        ####################################################
+        # Remove Bad Itineraries
+        ####################################################
+
+        cleaned = []
+
+        for flight in flights:
+
+            try:
+
+                duration = flight.total_duration.lower()
+
+                if "h" in duration:
+
+                    hours = int(duration.split("h")[0])
+
+                    if hours > 8:
+                        continue
+
+                if flight.stops > 1:
+                    continue
+
+            except Exception:
+
+                pass
+
+            cleaned.append(flight)
+
+        flights = cleaned
+
+        ####################################################
+        # Remove Duplicate Flights
+        ####################################################
+
+        unique = {}
+
+        for flight in flights:
+
+            if not flight.segments:
+                continue
+
+            first = flight.segments[0]
+
+            key = (
+
+                first.flight_number,
+
+                first.departure_time,
+
+                flight.stops,
+
+            )
+
+            if key not in unique:
+
+                unique[key] = flight
+
+            else:
+
+                if flight.price < unique[key].price:
+
+                    unique[key] = flight
+
+        flights = list(unique.values())
+
+        ####################################################
+        # Enterprise Ranking
+        ####################################################
+
+        flights = sorted(
+
+            flights,
+
+            key=lambda f: (
+
+                f.stops,
+
+                f.price,
+
+            ),
+
+        )
+
+        flights = flights[:10]
+
+        ####################################################
+        # Logging
+        ####################################################
+
+        logger.info(
+
+            "Flight Search Complete | %d flights",
+
+            len(flights),
+
+        )
+        print("Flights after filtering:", len(flights))
+
+        ####################################################
+        # Mock Detection
+        ####################################################
+
+        is_mock = (
+
+            bool(flights)
+
+            and all(
+
+                flight.is_mock
+
+                for flight in flights
+
+            )
+
+        )
+
+        ####################################################
+        # Build Result
+        ####################################################
+
+        result = TravelSearchResult(
+
+            session_id=session_id,
+
+            search_type=TravelMode.FLIGHT,
+
+            origin=ctx.origin,
+
+            destination=ctx.destination,
+
+            travel_date=travel_date,
+
+            flights=flights,
+
+            is_partial_mock=is_mock,
+
+            mock_reason=(
+                MOCK_DISCLAIMER
+                if is_mock
+                else None
+            ),
+
+        )
+
+        await self._store(result)
+
+        return result
+
+    # ==========================================================
+    # Trains
+    # ==========================================================
+
+    async def _trains(
+        self,
+        session_id: str,
+        ctx: TravelContext,
+    ) -> TravelSearchResult:
+
+        travel_date = (
+            ctx.travel_date
+            or datetime.now().strftime("%Y-%m-%d")
+        )
+
+        cache_key = self._ckey(
+            "trains",
+            ctx.origin,
+            ctx.destination,
+            travel_date,
+        )
+
+        trains = await self._read_cache(
+            cache_key,
+            "trains",
+        )
+
+        if trains is None:
+
+            logger.info("Train cache MISS")
+
+            trains = await trains_client.search(
+                ctx.origin or "",
+                ctx.destination or "",
+                travel_date,
+            )
+
+            await self._write_cache(
+                cache_key,
+                trains,
+            )
+
+        else:
+
+            logger.info("Train cache HIT")
+
+        trains = self._filter_trains(
+            trains,
+            ctx,
+        )
+
+        trains = self._sort_trains(trains)
+
+        trains = trains[:10]
+
+        logger.info(
+            "Train Search Complete | %d trains",
+            len(trains),
+        )
+
+        is_mock = (
+            bool(trains)
+            and all(t.is_mock for t in trains)
+        )
+
         result = TravelSearchResult(
             session_id=session_id,
             search_type=TravelMode.TRAIN,
-            origin=context.origin,
-            destination=context.destination,
+            origin=ctx.origin,
+            destination=ctx.destination,
             travel_date=travel_date,
             trains=trains,
             is_partial_mock=is_mock,
             mock_reason=MOCK_DISCLAIMER if is_mock else None,
         )
+
         await self._store(result)
+
         return result
 
-    # ── Buses ─────────────────────────────────────────────────────────────────
+    # ==========================================================
+    # Buses
+    # ==========================================================
 
-    async def _search_buses(self, session_id: str, context: TravelContext) -> TravelSearchResult:
-        travel_date = context.travel_date or datetime.now().strftime("%Y-%m-%d")
-        buses = await buses_client.search(
-            origin=context.origin or "",
-            destination=context.destination or "",
-            travel_date=travel_date,
+    async def _buses(
+        self,
+        session_id: str,
+        ctx: TravelContext,
+    ) -> TravelSearchResult:
+
+        travel_date = (
+            ctx.travel_date
+            or datetime.now().strftime("%Y-%m-%d")
         )
-        buses = self._filter_buses(buses, context)
-        buses = sorted(buses, key=lambda b: b.price)
 
-        logger.info(f"Found {len(buses)} buses for {context.origin} → {context.destination}")
+        buses = await buses_client.search(
+            ctx.origin or "",
+            ctx.destination or "",
+            travel_date,
+        )
 
-        is_mock = bool(buses) and all(b.is_mock for b in buses)
+        buses = self._filter_buses(
+            buses,
+            ctx,
+        )
+
+        buses = sorted(
+            buses,
+            key=lambda b: b.price,
+        )
+
+        buses = buses[:10]
+
+        logger.info(
+            "Bus Search Complete | %d buses",
+            len(buses),
+        )
+
+        is_mock = (
+            bool(buses)
+            and all(b.is_mock for b in buses)
+        )
+
         result = TravelSearchResult(
             session_id=session_id,
             search_type=TravelMode.BUS,
-            origin=context.origin,
-            destination=context.destination,
+            origin=ctx.origin,
+            destination=ctx.destination,
             travel_date=travel_date,
             buses=buses,
             is_partial_mock=is_mock,
             mock_reason=MOCK_DISCLAIMER if is_mock else None,
         )
+
         await self._store(result)
+
         return result
+    # ==========================================================
+    # Hotels
+    # ==========================================================
 
-    # ── Hotels ────────────────────────────────────────────────────────────────
+    async def _hotels(
+        self,
+        session_id: str,
+        ctx: TravelContext,
+    ) -> TravelSearchResult:
 
-    async def _search_hotels(self, session_id: str, context: TravelContext) -> TravelSearchResult:
-        dest_info = await geocoding_service.resolve(context.destination or "")
-        check_in  = context.travel_date or datetime.now().strftime("%Y-%m-%d")
-        ci        = datetime.strptime(check_in, "%Y-%m-%d")
-        check_out = context.return_date or (ci + timedelta(days=1)).strftime("%Y-%m-%d")
-
-        cache_key = self._result_cache_key(
-            "hotels", context.destination, None, check_in, check_out
+        check_in = (
+            ctx.travel_date
+            or datetime.now().strftime("%Y-%m-%d")
         )
-        cached = await self._read_result_cache(cache_key)
-        if cached is not None:
-            hotels = cached
-            logger.info(f"Hotel cache HIT: {context.destination} ({check_in} → {check_out})")
-        else:
+
+        checkin_date = datetime.strptime(
+            check_in,
+            "%Y-%m-%d",
+        )
+
+        check_out = (
+            ctx.return_date
+            or (
+                checkin_date +
+                timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+        )
+
+        destination = ctx.destination or ""
+
+        coords = get_city_coords(destination)
+
+        latitude = longitude = None
+
+        if coords:
+
+            latitude, longitude = coords
+
+        meeting_lat = None
+        meeting_lng = None
+
+        if ctx.meeting:
+
+            meeting_lat = ctx.meeting.meeting_lat
+            meeting_lng = ctx.meeting.meeting_lng
+
+        cache_key = self._ckey(
+            "hotels",
+            destination,
+            check_in,
+            check_out,
+        )
+
+        hotels = await self._read_cache(
+            cache_key,
+            "hotels",
+        )
+
+        if hotels is None:
+
+            logger.info("Hotel cache MISS")
+
             hotels = await hotels_client.search(
-                destination=context.destination or "",
+
+                destination=destination,
+
                 check_in=check_in,
+
                 check_out=check_out,
-                guests=context.passengers,
-                stars=None,  # fetch unfiltered, apply star filter locally below
-                latitude=dest_info.latitude if dest_info else None,
-                longitude=dest_info.longitude if dest_info else None,
+
+                guests=ctx.passengers,
+
+                latitude=latitude,
+
+                longitude=longitude,
+
+                meeting_lat=meeting_lat,
+
+                meeting_lng=meeting_lng,
+
             )
-            if hotels and not all(h.is_mock for h in hotels):
-                await self._write_result_cache(cache_key, hotels)
 
-        hotels = self._dedupe_hotels(hotels)
-        hotels = self._filter_hotels(hotels, context)
-        hotels = self._sort_hotels(hotels)
+            await self._write_cache(
+                cache_key,
+                hotels,
+            )
 
-        logger.info(f"Found {len(hotels)} hotels for {context.destination}")
+        else:
 
-        is_mock = bool(hotels) and all(h.is_mock for h in hotels)
-        result = TravelSearchResult(
-            session_id=session_id,
-            search_type=TravelMode.HOTEL,
-            destination=context.destination,
-            hotels=hotels,
-            is_partial_mock=is_mock,
-            mock_reason=MOCK_DISCLAIMER if is_mock else None,
+            logger.info("Hotel cache HIT")
+
+        hotels = self._dedupe(hotels)
+
+        hotels = self._filter_hotels(
+            hotels,
+            ctx,
         )
+
+        hotels = sorted(
+
+            hotels,
+
+            key=lambda hotel: (
+
+                hotel.distance_from_meeting
+                if hotel.distance_from_meeting is not None
+                else 999,
+
+                hotel.price_per_night,
+
+                -(hotel.review_score or 0),
+
+            ),
+
+        )
+
+        hotels = hotels[:10]
+
+        logger.info(
+            "Hotel Search Complete | %d hotels",
+            len(hotels),
+        )
+
+        is_mock = (
+            bool(hotels)
+            and all(h.is_mock for h in hotels)
+        )
+
+        result = TravelSearchResult(
+
+            session_id=session_id,
+
+            search_type=TravelMode.HOTEL,
+
+            destination=destination,
+
+            hotels=hotels,
+
+            is_partial_mock=is_mock,
+
+            mock_reason=(
+                MOCK_DISCLAIMER
+                if is_mock
+                else None
+            ),
+
+        )
+
         await self._store(result)
+
         return result
 
-    # ── Cars ──────────────────────────────────────────────────────────────────
+    # ==========================================================
+    # Cars
+    # ==========================================================
 
-    async def _search_cars(self, session_id: str, context: TravelContext) -> TravelSearchResult:
-        location = context.destination or context.origin or ""
-        dest_info = await geocoding_service.resolve(location)
-        pickup_date = context.travel_date or datetime.now().strftime("%Y-%m-%d")
+    async def _cars(
+        self,
+        session_id: str,
+        ctx: TravelContext,
+    ) -> TravelSearchResult:
 
-        cache_key = self._result_cache_key("cars", location, None, pickup_date)
-        cached = await self._read_result_cache(cache_key)
-        if cached is not None:
-            cars = cached
-            logger.info(f"Car cache HIT: {location} ({pickup_date})")
-        else:
+        location = ctx.destination or ctx.origin or ""
+
+        travel_date = (
+            ctx.travel_date
+            or datetime.now().strftime("%Y-%m-%d")
+        )
+
+        coords = get_city_coords(location)
+
+        latitude = longitude = None
+
+        if coords:
+            latitude, longitude = coords
+
+        cache_key = self._ckey(
+            "cars",
+            location,
+            travel_date,
+        )
+
+        cars = await self._read_cache(
+            cache_key,
+            "cars",
+        )
+
+        if cars is None:
+
+            logger.info("Car cache MISS")
+
             cars = await cars_client.search(
                 location=location,
-                pickup_date=pickup_date,
-                latitude=dest_info.latitude if dest_info else None,
-                longitude=dest_info.longitude if dest_info else None,
+                pickup_date=travel_date,
+                latitude=latitude,
+                longitude=longitude,
             )
-            if cars and not all(c.is_mock for c in cars):
-                await self._write_result_cache(cache_key, cars)
 
-        cars = self._filter_cars(cars, context)
-        cars = sorted(cars, key=lambda c: c.price_per_day)
+            await self._write_cache(
+                cache_key,
+                cars,
+            )
 
-        logger.info(f"Found {len(cars)} cars for {location}")
+        else:
 
-        is_mock = bool(cars) and all(c.is_mock for c in cars)
+            logger.info("Car cache HIT")
+
+        cars = self._filter_cars(
+            cars,
+            ctx,
+        )
+
+        cars = sorted(
+            cars,
+            key=lambda x: x.price_per_day,
+        )
+
+        cars = cars[:10]
+
+        is_mock = (
+            bool(cars)
+            and all(c.is_mock for c in cars)
+        )
+
         result = TravelSearchResult(
             session_id=session_id,
             search_type=TravelMode.CAR,
@@ -328,231 +902,417 @@ class TravelSearchService:
             is_partial_mock=is_mock,
             mock_reason=MOCK_DISCLAIMER if is_mock else None,
         )
+
         await self._store(result)
+
         return result
 
-    # ── Filters (STRICT — never silently fall back to unfiltered) ──────────────
-    #
-    # Rule: if the user explicitly asked for a budget/stars/class constraint,
-    # we apply it exactly. An empty result list is a valid, honest outcome
-    # ("no flights under ₹2000") rather than silently showing everything.
+    # ==========================================================
+    # Filters
+    # ==========================================================
 
-    def _filter_flights(
-        self,
-        flights: List[FlightResult],
-        ctx: TravelContext
-    ) -> List[FlightResult]:
-
-        if not flights:
-            return []
-
-        r = list(flights)
-
-        # budget filters
+    def _filter_flights(self, flights, ctx):
+        print(">>>>>>>> ENTERED _flights() <<<<<<<<")
         if ctx.max_budget is not None:
-            r = [f for f in r if f.price <= ctx.max_budget]
+            flights = [f for f in flights if f.price <= ctx.max_budget]
 
         if ctx.min_budget is not None:
-            r = [f for f in r if f.price >= ctx.min_budget]
+            flights = [f for f in flights if f.price >= ctx.min_budget]
 
-        # nonstop filter
         if ctx.non_stop_only:
-            r = [f for f in r if f.stops == 0]
+            flights = [f for f in flights if f.stops == 0]
 
-        # cabin filter
         if ctx.cabin_class:
-            r = [f for f in r if f.cabin_class == ctx.cabin_class]
+            flights = [
+                f
+                for f in flights
+                if f.cabin_class == ctx.cabin_class
+            ]
 
-        # remove crazy durations (>8 hours)
-        good = []
+        return flights
 
-        for f in r:
-            try:
-                hours = int(f.total_duration.split("h")[0])
-                if hours <= 8:
-                    good.append(f)
-            except:
-                good.append(f)
 
-        return good
+    def _filter_trains(self, trains, ctx):
 
-    def _filter_trains(self, trains: List[TrainResult], ctx: TravelContext) -> List[TrainResult]:
-        if not trains:
-            return []
-        r = list(trains)
         if ctx.train_class:
-            r = [t for t in r if any(
-                c.class_code.upper() == ctx.train_class.value.upper()
-                for c in t.classes
-            )]
-        if ctx.max_budget is not None:
-            # Train passes the budget filter if its CHEAPEST class is within budget
-            def cheapest(t: TrainResult) -> float:
-                prices = [c.price for c in t.classes if c.price and c.price > 0]
-                return min(prices) if prices else float("inf")
-            r = [t for t in r if cheapest(t) <= ctx.max_budget]
-        return r
 
-    def _filter_buses(self, buses: List[BusResult], ctx: TravelContext) -> List[BusResult]:
-        if not buses:
-            return []
-        r = list(buses)
-        if ctx.max_budget is not None:
-            r = [b for b in r if b.price <= ctx.max_budget]
-        return r
+            trains = [
 
-    def _filter_hotels(self, hotels: List[HotelResult], ctx: TravelContext) -> List[HotelResult]:
-        if not hotels:
-            return []
-        r = list(hotels)
+                t
+
+                for t in trains
+
+                if any(
+
+                    c.class_code.upper()
+                    == ctx.train_class.value.upper()
+
+                    for c in t.classes
+
+                )
+
+            ]
+
+        if ctx.max_budget is not None:
+
+            trains = [
+
+                t
+
+                for t in trains
+
+                if min(
+
+                    (
+                        c.price
+                        for c in t.classes
+                        if c.price
+                    ),
+
+                    default=999999,
+
+                ) <= ctx.max_budget
+
+            ]
+
+        return trains
+
+
+    def _filter_buses(self, buses, ctx):
+
+        if ctx.max_budget is not None:
+
+            buses = [
+
+                b
+
+                for b in buses
+
+                if b.price <= ctx.max_budget
+
+            ]
+
+        return buses
+
+
+    def _filter_hotels(self, hotels, ctx):
+
         if ctx.hotel_stars is not None:
-            r = [h for h in r if h.stars == ctx.hotel_stars]
+
+            hotels = [
+
+                h
+
+                for h in hotels
+
+                if h.stars == ctx.hotel_stars
+
+            ]
+
         if ctx.max_budget is not None:
-            r = [h for h in r if h.price_per_night <= ctx.max_budget]
-        if ctx.min_budget is not None:
-            r = [h for h in r if h.price_per_night >= ctx.min_budget]
-        for amenity in (ctx.amenities or []):
-            r = [h for h in r if any(
-                amenity.lower() in a.lower() for a in h.amenities
-            )]
-        return r
 
-    def _filter_cars(self, cars: List[CarResult], ctx: TravelContext) -> List[CarResult]:
-        if not cars:
-            return []
-        r = list(cars)
+            hotels = [
+
+                h
+
+                for h in hotels
+
+                if h.price_per_night <= ctx.max_budget
+
+            ]
+
+        if ctx.min_budget is not None:
+
+            hotels = [
+
+                h
+
+                for h in hotels
+
+                if h.price_per_night >= ctx.min_budget
+
+            ]
+
+        for amenity in ctx.amenities:
+
+            hotels = [
+
+                h
+
+                for h in hotels
+
+                if any(
+
+                    amenity.lower() in a.lower()
+
+                    for a in h.amenities
+
+                )
+
+            ]
+
+        return hotels
+
+
+    def _filter_cars(self, cars, ctx):
+
         if ctx.max_budget is not None:
-            r = [c for c in r if c.price_per_day <= ctx.max_budget]
-        if ctx.min_budget is not None:
-            r = [c for c in r if c.price_per_day >= ctx.min_budget]
-        return r
 
-    # ── Sorting ───────────────────────────────────────────────────────────────
+            cars = [
 
-    def _sort_flights(self, flights: List[FlightResult]) -> List[FlightResult]:
+                c
 
-        # remove duplicates
+                for c in cars
+
+                if c.price_per_day <= ctx.max_budget
+
+            ]
+
+        return cars
+
+    # ==========================================================
+    # Sorting
+    # ==========================================================
+
+    def _sort_flights(self, flights):
+
         unique = {}
 
         for f in flights:
 
-            first_seg = f.segments[0]
+            if not f.segments:
+                continue
+
+            first = f.segments[0]
 
             key = (
-                first_seg.flight_number,
-                first_seg.departure_time,
-                f.stops
+
+                first.flight_number,
+
+                first.departure_time,
+
+                f.stops,
+
             )
 
             if key not in unique:
+
                 unique[key] = f
 
-            else:
-                if f.price < unique[key].price:
-                    unique[key] = f
+            elif f.price < unique[key].price:
+
+                unique[key] = f
 
         flights = list(unique.values())
 
         return sorted(
+
             flights,
-            key=lambda f: (
-                f.stops,
-                f.price
-            )
+
+            key=lambda x: (
+
+                x.stops,
+
+                x.price,
+
+            ),
+
         )
 
-    def _sort_trains(self, trains: List[TrainResult]) -> List[TrainResult]:
-        """Sort by cheapest available class price."""
-        def cheapest(t: TrainResult) -> float:
-            prices = [c.price for c in t.classes if c.price and c.price > 0]
-            return min(prices) if prices else float("inf")
-        return sorted(trains, key=cheapest)
 
-    def _sort_hotels(self, hotels: List[HotelResult]) -> List[HotelResult]:
-        """Sort by price first, rating as tiebreaker (higher rating wins ties)."""
-        return sorted(hotels, key=lambda h: (h.price_per_night, -(h.review_score or 0)))
+    def _sort_trains(self, trains):
 
-    # ── Deduplication ────────────────────────────────────────────────────────
+        return sorted(
 
-    def _dedupe_hotels(self, hotels: List[HotelResult]) -> List[HotelResult]:
-        """Remove duplicate hotels (same name + same price) that some
-        upstream API responses occasionally repeat across pages."""
+            trains,
+
+            key=lambda t: min(
+
+                (
+
+                    c.price
+
+                    for c in t.classes
+
+                    if c.price
+
+                ),
+
+                default=999999,
+
+            ),
+
+        )
+
+    def _dedupe(self, hotels):
+
         seen = set()
+
         result = []
-        for h in hotels:
-            key = (h.name.strip().lower(), round(h.price_per_night, 2))
+
+        for hotel in hotels:
+
+            key = (
+
+                hotel.name.lower().strip(),
+
+                round(hotel.price_per_night, 2),
+
+            )
+
             if key in seen:
                 continue
+
             seen.add(key)
-            result.append(h)
+
+            result.append(hotel)
+
         return result
 
-    # ── Result Cache (30 min TTL, keyed by search params) ───────────────────────
+    # ==========================================================
+    # Cache
+    # ==========================================================
 
-    def _result_cache_key(self, kind: str, a: Optional[str], b: Optional[str], *rest) -> str:
-        raw = "|".join([kind, (a or "").lower(), (b or "").lower()] + [str(x) for x in rest if x])
+    def _ckey(self, *parts):
+
+        raw = "|".join(
+
+            str(x or "").lower()
+
+            for x in parts
+
+        )
+
         return "search:" + hashlib.md5(raw.encode()).hexdigest()
 
-    async def _read_result_cache(self, cache_key: str):
-        try:
-            db = get_db()
-            doc = await db.cached_results.find_one({"cache_key": cache_key})
-            if not doc or not doc.get("value"):
-                return None
 
-            import json
-            from models.travel import (
-                FlightResult, HotelResult, TrainResult, BusResult, CarResult
+    async def _read_cache(self, key, kind):
+
+        try:
+
+            db = get_db()
+
+            doc = await db.cached_results.find_one(
+                {"cache_key": key}
             )
-            kind = doc.get("kind")
-            raw_list = json.loads(doc["value"])
+
+            if not doc:
+                return None
 
             model_map = {
-                "flights": FlightResult, "hotels": HotelResult,
-                "trains": TrainResult, "buses": BusResult, "cars": CarResult,
+
+                "flights": FlightResult,
+
+                "hotels": HotelResult,
+
+                "trains": TrainResult,
+
+                "buses": BusResult,
+
+                "cars": CarResult,
+
             }
-            model = model_map.get(kind)
-            if not model:
-                return None
-            return [model(**item) for item in raw_list]
-        except Exception as e:
-            logger.debug(f"Result cache read failed ({cache_key}): {e}")
+
+            model = model_map[kind]
+
+            return [
+
+                model(**x)
+
+                for x in json.loads(doc["value"])
+
+            ]
+
+        except Exception:
+
             return None
 
-    async def _write_result_cache(self, cache_key: str, results: List) -> None:
+
+    async def _write_cache(
+        self,
+        key,
+        results,
+    ):
+
         if not results:
-            return  # don't cache empty results — let next call retry the API
+            return
+
         try:
+
             db = get_db()
-            import json
-            kind = type(results[0]).__name__.lower().replace("result", "")
-            kind_map = {"flight": "flights", "hotel": "hotels", "train": "trains",
-                        "bus": "buses", "car": "cars"}
-            kind = kind_map.get(kind, kind)
 
             await db.cached_results.update_one(
-                {"cache_key": cache_key},
-                {"$set": {
-                    "cache_key": cache_key,
-                    "kind": kind,
-                    "value": json.dumps([r.dict() for r in results], default=str),
-                    "expires_at": datetime.utcnow() + timedelta(seconds=settings.TRAVEL_RESULT_CACHE_TTL),
-                }},
+
+                {"cache_key": key},
+
+                {
+
+                    "$set": {
+
+                        "cache_key": key,
+
+                        "value": json.dumps(
+
+                            [
+
+                                r.dict()
+
+                                for r in results
+
+                            ],
+
+                            default=str,
+
+                        ),
+
+                        "expires_at": datetime.utcnow()
+                        + timedelta(
+                            seconds=settings.TRAVEL_RESULT_CACHE_TTL
+                        ),
+
+                    }
+
+                },
+
                 upsert=True,
+
             )
+
         except Exception as e:
-            logger.debug(f"Result cache write failed ({cache_key}): {e}")
 
-    # ── Storage ───────────────────────────────────────────────────────────────
+            logger.debug(e)
 
-    async def _store(self, result: TravelSearchResult) -> None:
+
+    # ==========================================================
+    # Storage
+    # ==========================================================
+
+    async def _store(
+        self,
+        result: TravelSearchResult,
+    ):
+
         try:
+
             db = get_db()
-            data = result.dict()
-            data = {k: v for k, v in data.items() if v is not None}
-            await db.travel_searches.insert_one(data)
+
+            await db.travel_searches.insert_one(
+
+                {
+
+                    k: v
+
+                    for k, v in result.dict().items()
+
+                    if v is not None
+
+                }
+
+            )
+
         except Exception as e:
-            logger.warning(f"Failed to store search results: {e}")
+
+            logger.warning(e)
 
 
 travel_search_service = TravelSearchService()

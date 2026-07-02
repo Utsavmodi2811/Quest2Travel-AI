@@ -37,26 +37,45 @@ export const useChatStore = create<ChatState>((set) => ({
   sidebarOpen: true,
   darkMode: false,
 
-  setSessionId:       (id) => set({ sessionId: id }),
-  addMessage:         (msg) => set((s) => ({ messages: [...s.messages, msg] })),
-  updateMessage:      (id, updates) => set((s) => ({
-    messages: s.messages.map((m) =>
-      m.message_id === id ? { ...m, ...updates } : m
-    ),
-  })),
-  setMessages:        (msgs) => set({ messages: msgs }),
-  setTravelContext:   (ctx) => set({ travelContext: ctx }),
-  setLoading:         (v) => set({ isLoading: v }),
-  setSuggestions:     (s) => set({ suggestions: s }),
-  setSessions:        (s) => set({ sessions: s }),
+  setSessionId: (id) => set({ sessionId: id }),
+
+  addMessage: (msg) =>
+    set((s) => ({
+      messages: [...s.messages, msg],
+    })),
+
+  updateMessage: (id, updates) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.message_id === id ? { ...m, ...updates } : m
+      ),
+    })),
+
+  setMessages: (msgs) => set({ messages: msgs }),
+
+  setTravelContext: (ctx) => set({ travelContext: ctx }),
+
+  setLoading: (v) => set({ isLoading: v }),
+
+  setSuggestions: (s) => set({ suggestions: s }),
+
+  setSessions: (s) => set({ sessions: s }),
+
   setSessionsLoading: (v) => set({ sessionsLoading: v }),
-  setSidebarOpen:     (v) => set({ sidebarOpen: v }),
-  toggleDarkMode:     () => set((s) => ({ darkMode: !s.darkMode })),
-  startNewChat:       () => set({
-    sessionId: null,
-    messages: [],
-    travelContext: null,
-    suggestions: [],
-    isLoading: false,
-  }),
+
+  setSidebarOpen: (v) => set({ sidebarOpen: v }),
+
+  toggleDarkMode: () =>
+    set((s) => ({
+      darkMode: !s.darkMode,
+    })),
+
+  startNewChat: () =>
+    set({
+      sessionId: null,
+      messages: [],
+      travelContext: null,
+      suggestions: [],
+      isLoading: false,
+    }),
 }));

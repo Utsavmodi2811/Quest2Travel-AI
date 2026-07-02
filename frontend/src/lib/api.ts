@@ -1,10 +1,9 @@
 import axios from 'axios';
 import { ChatRequest, ChatResponse, SessionSummary } from '@/types';
 
-// With Next.js rewrites, /api/* proxies to backend automatically.
-// This eliminates ALL CORS issues — browser calls same-origin /api/*.
+// Uses Next.js rewrite proxy → eliminates CORS entirely
 const api = axios.create({
-  baseURL: '',   // empty = same origin, rewrites handle the proxy
+  baseURL: '',
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });
@@ -17,6 +16,7 @@ api.interceptors.response.use(
       err.response?.data?.message ||
       err.message ||
       'Request failed';
+
     console.error('[API Error]', msg, err.config?.url);
     return Promise.reject(new Error(msg));
   }
@@ -27,7 +27,9 @@ export const chatApi = {
     api.post<ChatResponse>('/api/chat', data).then((r) => r.data),
 
   getHistory: (sessionId: string, limit = 50) =>
-    api.get(`/api/chat/${sessionId}/history`, { params: { limit } }).then((r) => r.data),
+    api
+      .get(`/api/chat/${sessionId}/history`, { params: { limit } })
+      .then((r) => r.data),
 
   getContext: (sessionId: string) =>
     api.get(`/api/chat/${sessionId}/context`).then((r) => r.data),
@@ -38,8 +40,11 @@ export const chatApi = {
 
 export const sessionsApi = {
   list: (limit = 20): Promise<SessionSummary[]> =>
-    api.get<SessionSummary[]>('/api/sessions', { params: { limit } }).then((r) => r.data),
+    api
+      .get<SessionSummary[]>('/api/sessions', { params: { limit } })
+      .then((r) => r.data),
 
+  // Preserved from old version
   get: (sessionId: string) =>
     api.get(`/api/sessions/${sessionId}`).then((r) => r.data),
 
@@ -47,15 +52,35 @@ export const sessionsApi = {
     api.delete(`/api/sessions/${sessionId}`).then((r) => r.data),
 };
 
+// Added from new version
+export const companyApi = {
+  list: () =>
+    api.get('/api/company').then((r) => r.data),
+
+  create: (data: object) =>
+    api.post('/api/company', data).then((r) => r.data),
+
+  updateServices: (companyId: string, services: string[]) =>
+    api
+      .put(`/api/company/${companyId}/services`, services)
+      .then((r) => r.data),
+};
+
+// Preserved from old version
 export const travelApi = {
   getSearches: (sessionId: string, limit = 10) =>
-    api.get(`/api/travel/${sessionId}/searches`, { params: { limit } }).then((r) => r.data),
+    api
+      .get(`/api/travel/${sessionId}/searches`, {
+        params: { limit },
+      })
+      .then((r) => r.data),
 
   applyFilters: (data: {
     session_id: string;
     filters: Record<string, unknown>;
     search_type: string;
-  }) => api.post('/api/travel/filter', data).then((r) => r.data),
+  }) =>
+    api.post('/api/travel/filter', data).then((r) => r.data),
 };
 
 export default api;

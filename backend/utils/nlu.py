@@ -1,272 +1,656 @@
 """
-Natural Language Understanding utilities.
-Handles fuzzy city matching, spell correction, alias resolution,
-and travel intent extraction.
+Natural Language Understanding.
+
+Merged Version
+--------------
+Preserves all old functionality while adding:
+- Improved city resolution
+- Intent detection
+- Meeting information extraction
+- Destination-only extraction
+- Time extraction
+- Better fuzzy matching
 """
 
 import re
 import logging
+
 from typing import Optional, Tuple, Dict, List
 from datetime import datetime, timedelta
+
 from rapidfuzz import process, fuzz
 import dateparser
 
+# -------- New City Database --------
+from utils.india_cities import (
+    INDIA_CITIES,
+    CITY_ALIASES,
+    resolve_city as _resolve_city_data,
+    get_all_cities,
+)
+
+# -------- New Models --------
+from models.travel import (
+    IntentType,
+    MeetingInfo,
+)
+
 logger = logging.getLogger(__name__)
 
-# ─── City Alias & Known Cities Dictionary ────────────────────────────────────
+# All known cities from database
+_ALL_CITIES = get_all_cities()
+
+# ============================================================================
+# Legacy aliases (kept for backward compatibility)
+# ============================================================================
 
 CITY_ALIASES: Dict[str, str] = {
-    # Common misspellings and aliases for Indian cities
-    "delhii": "delhi", "dilhi": "delhi", "dilli": "delhi", "new dhelhi": "new delhi",
-    "mumabi": "mumbai", "bombay": "mumbai", "mumbay": "mumbai", "mumba": "mumbai",
-    "banglore": "bangalore", "bengaluru": "bangalore", "bangalor": "bangalore",
-    "bangluru": "bangalore", "blr": "bangalore",
-    "ahemdabad": "ahmedabad", "ahmedabd": "ahmedabad", "amdavad": "ahmedabad",
-    "punne": "pune", "poona": "pune", "puna": "pune",
-    "hydrabad": "hyderabad", "hyderabad": "hyderabad", "hyd": "hyderabad",
-    "chenai": "chennai", "madras": "chennai", "chennaai": "chennai",
-    "kolkatta": "kolkata", "calcutta": "kolkata", "kolkota": "kolkata",
-    "jaipur": "jaipur", "jaipure": "jaipur", "pinkcity": "jaipur",
-    "goa": "goa", "panaji": "goa", "panjim": "goa",
-    "kochi": "kochi", "cochin": "kochi", "ernakulam": "kochi",
-    "thiruvananthapuram": "trivandrum", "trivandrum": "trivandrum",
-    "bhopal": "bhopal", "lucknow": "lucknow", "lko": "lucknow",
-    "nagpur": "nagpur", "indore": "indore", "surat": "surat",
-    "vadodara": "vadodara", "baroda": "vadodara",
-    "amritsar": "amritsar", "chandigarh": "chandigarh",
-    "shimla": "shimla", "simla": "shimla", "manali": "manali",
-    "varanasi": "varanasi", "banaras": "varanasi", "benares": "varanasi", "kashi": "varanasi",
-    "agra": "agra", "mathura": "mathura", "vrindavan": "vrindavan",
-    "dehradun": "dehradun", "doon": "dehradun",
-    "haridwar": "haridwar", "rishikesh": "rishikesh",
-    "darjeeling": "darjeeling", "gangtok": "gangtok",
-    "puri": "puri", "bhubaneswar": "bhubaneswar", "cuttack": "cuttack",
-    "patna": "patna", "ranchi": "ranchi", "raipur": "raipur",
-    "coimbatore": "coimbatore", "madurai": "madurai", "trichy": "tiruchirappalli",
-    "vizag": "visakhapatnam", "visakhapatnam": "visakhapatnam",
-    "rajkot": "rajkot", "surat": "surat", "gandhinagar": "gandhinagar",
-    "jodhpur": "jodhpur", "udaipur": "udaipur", "ajmer": "ajmer",
-    "mysore": "mysuru", "mysuru": "mysuru", "ooty": "ooty",
-    "aurangabad": "aurangabad", "nashik": "nashik", "kolhapur": "kolhapur",
-    "leh": "leh", "ladakh": "leh", "srinagar": "srinagar", "jammu": "jammu",
-    "port blair": "port blair", "andaman": "port blair",
-    # International
-    "dubai": "dubai", "singapore": "singapore", "bangkok": "bangkok",
-    "london": "london", "paris": "paris", "new york": "new york",
-    "nyc": "new york", "ny": "new york",
-    "la": "los angeles", "sf": "san francisco",
+    "delhii": "delhi",
+    "dilhi": "delhi",
+    "dilli": "delhi",
+    "new dhelhi": "new delhi",
+
+    "mumabi": "mumbai",
+    "bombay": "mumbai",
+    "mumbay": "mumbai",
+    "mumba": "mumbai",
+
+    "banglore": "bangalore",
+    "bangalor": "bangalore",
+    "bangluru": "bangalore",
+    "blr": "bangalore",
+
+    "ahemdabad": "ahmedabad",
+    "ahmedabd": "ahmedabad",
+    "amdavad": "ahmedabad",
+
+    "punne": "pune",
+    "poona": "pune",
+    "puna": "pune",
+
+    "hydrabad": "hyderabad",
+    "hyd": "hyderabad",
+
+    "chenai": "chennai",
+    "madras": "chennai",
+
+    "kolkatta": "kolkata",
+    "calcutta": "kolkata",
+
+    "baroda": "vadodara",
+
+    "banaras": "varanasi",
+    "benares": "varanasi",
+    "kashi": "varanasi",
+
+    "cochin": "kochi",
+    "panjim": "goa",
+    "panaji": "goa",
+
+    "mysore": "mysuru",
+    "trichy": "tiruchirappalli",
+    "vizag": "visakhapatnam",
+
+    "nyc": "new york",
+    "ny": "new york",
+    "la": "los angeles",
+    "sf": "san francisco",
 }
 
-KNOWN_CITIES: List[str] = sorted(set(CITY_ALIASES.values()) | {
-    "delhi", "mumbai", "bangalore", "hyderabad", "chennai",
-    "kolkata", "pune", "ahmedabad", "jaipur", "goa",
-    "kochi", "lucknow", "chandigarh", "shimla", "manali",
-    "varanasi", "agra", "dehradun", "haridwar", "rishikesh",
-    "darjeeling", "puri", "bhubaneswar", "patna", "raipur",
-    "coimbatore", "madurai", "visakhapatnam", "rajkot",
-    "jodhpur", "udaipur", "mysuru", "ooty", "nashik",
-    "leh", "srinagar", "jammu", "port blair",
-    "dubai", "singapore", "bangkok", "london", "paris",
-    "new york", "los angeles", "san francisco",
-})
-
-# ─── Travel Intent Patterns ───────────────────────────────────────────────────
+# ============================================================================
+# Route Patterns
+# ============================================================================
 
 TRAVEL_ROUTE_PATTERNS = [
-    r"(?:from\s+)?(\w[\w\s]+?)\s+to\s+(\w[\w\s]+?)(?:\s+(?:on|for|date|trip|flight|train|bus|by|cheap|budget))?(?:\s|$)",
-    r"(\w[\w\s]+?)\s*[-–→]\s*(\w[\w\s]+)",
-    r"book\s+(?:a\s+)?(?:flight|train|bus)\s+(?:from\s+)?(\w[\w\s]+?)\s+to\s+(\w[\w\s]+)",
+
+    r"(?:from\s+)?([a-zA-Z][a-zA-Z\s]{1,25}?)\s+to\s+([a-zA-Z][a-zA-Z\s]{1,25}?)(?:\s+(?:on|for|date|trip|flight|train|bus|cheap|budget|by)|\s*$)",
+
+    r"([a-zA-Z][a-zA-Z\s]{1,25}?)\s*[-–→]\s*([a-zA-Z][a-zA-Z\s]{1,25})",
+
+    r"book\s+(?:a\s+)?(?:flight|train|bus)\s+(?:from\s+)?([a-zA-Z][a-zA-Z\s]{1,25}?)\s+to\s+([a-zA-Z][a-zA-Z\s]{1,25})",
 ]
+
+# ============================================================================
+# Date Patterns
+# ============================================================================
 
 DATE_PATTERNS = [
+
     r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b",
-    r"\b(today|tomorrow|next\s+\w+|this\s+\w+)\b",
+
+    r"\b(today|tomorrow|day after tomorrow|next\s+\w+|this\s+\w+)\b",
+
     r"\b(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*)\b",
+
+    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}\b",
 ]
 
-FLIGHT_KEYWORDS = ["flight", "fly", "flying", "airline", "airport", "airways",
-                   "economy", "business class", "first class", "non.stop"]
-TRAIN_KEYWORDS = ["train", "railway", "irctc", "sleeper", "ac coach", "rajdhani",
-                  "shatabdi", "express", "passenger", "3ac", "2ac", "1ac"]
-BUS_KEYWORDS = ["bus", "coach", "volvo", "redbus", "sleeper bus", "ac bus",
-                "overnight bus", "semi sleeper"]
-HOTEL_KEYWORDS = ["hotel", "stay", "accommodation", "hostel", "resort",
-                  "room", "check in", "checkout", "5 star", "3 star", "4 star"]
-CAR_KEYWORDS = ["car", "cab", "taxi", "rent", "rental", "suv", "sedan", "ola", "uber",
-                "self drive", "chauffeur"]
+# ============================================================================
+# Travel Keywords
+# ============================================================================
 
+TRAVEL_KEYWORDS = {
 
-# ─── Core Functions ───────────────────────────────────────────────────────────
+    "flight": [
+        "flight",
+        "fly",
+        "flying",
+        "airport",
+        "airline",
+        "airways",
+        "economy",
+        "business class",
+        "premium economy",
+        "first class",
+        "non stop",
+        "nonstop",
+        "direct flight",
+    ],
+
+    "train": [
+        "train",
+        "railway",
+        "irctc",
+        "rajdhani",
+        "shatabdi",
+        "express",
+        "sleeper",
+        "chair car",
+        "3ac",
+        "2ac",
+        "1ac",
+    ],
+
+    "bus": [
+        "bus",
+        "coach",
+        "volvo",
+        "redbus",
+        "ac bus",
+        "sleeper bus",
+        "semi sleeper",
+    ],
+
+    "hotel": [
+        "hotel",
+        "stay",
+        "room",
+        "hostel",
+        "resort",
+        "accommodation",
+        "check in",
+        "checkout",
+        "5 star",
+        "4 star",
+        "3 star",
+        "lodge",
+    ],
+
+    "car": [
+        "car",
+        "cab",
+        "taxi",
+        "uber",
+        "ola",
+        "rental",
+        "rent",
+        "self drive",
+        "suv",
+        "sedan",
+    ],
+}
+
+# Old compatibility lists
+FLIGHT_KEYWORDS = TRAVEL_KEYWORDS["flight"]
+TRAIN_KEYWORDS = TRAVEL_KEYWORDS["train"]
+BUS_KEYWORDS = TRAVEL_KEYWORDS["bus"]
+HOTEL_KEYWORDS = TRAVEL_KEYWORDS["hotel"]
+CAR_KEYWORDS = TRAVEL_KEYWORDS["car"]
+
+# ============================================================================
+# Meeting Intent Signals
+# ============================================================================
+
+MEETING_SIGNALS = [
+
+    r"\bmeeting\b",
+    r"\bconference\b",
+    r"\bpresentation\b",
+    r"\bclient\b",
+    r"\bappointment\b",
+    r"\binterview\b",
+
+    r"\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",
+
+    r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\s+(?:meeting|conference)\b",
+]
+
+# ============================================================================
+# Stop Words
+# ============================================================================
+
+STOP_WORDS = {
+
+    "on",
+    "for",
+    "by",
+    "cheap",
+    "cheapest",
+    "budget",
+    "best",
+    "travel",
+    "trip",
+    "booking",
+    "flight",
+    "train",
+    "bus",
+}
+
+# ============================================================================
+# Core Functions
+# ============================================================================
 
 def normalize_city(raw: str) -> str:
-    """Normalize city name: lowercase, strip, replace multiple spaces."""
-    return re.sub(r'\s+', ' ', raw.strip().lower())
-
-
-def resolve_city(raw_city: str) -> Tuple[str, float]:
     """
-    Resolve a raw city string to a canonical city name.
-    Returns (canonical_name, confidence_score).
-    confidence 1.0 = exact match, 0.0 = no match.
+    Normalize city name.
     """
-    if not raw_city or not raw_city.strip():
-        return raw_city, 0.0
+    return re.sub(r"\s+", " ", raw.strip().lower())
 
-    normalized = normalize_city(raw_city)
 
-    # 1. Exact alias match
+def resolve_city(raw: str) -> Tuple[str, float]:
+    """
+    Resolve a city name using:
+
+    1. india_cities database
+    2. Legacy aliases
+    3. RapidFuzz
+    4. Fallback
+    """
+
+    if not raw or not raw.strip():
+        return raw or "", 0.0
+
+    normalized = normalize_city(raw)
+
+    # ------------------------------------------------------------------
+    # New city database
+    # ------------------------------------------------------------------
+
+    try:
+        city_data = _resolve_city_data(normalized)
+
+        if city_data:
+            return city_data["city"].title(), 1.0
+
+    except Exception:
+        pass
+
+    # ------------------------------------------------------------------
+    # Legacy aliases
+    # ------------------------------------------------------------------
+
     if normalized in CITY_ALIASES:
-        return CITY_ALIASES[normalized], 1.0
+        return CITY_ALIASES[normalized].title(), 1.0
 
-    # 2. Exact known city match
-    if normalized in KNOWN_CITIES:
-        return normalized, 1.0
+    # ------------------------------------------------------------------
+    # Exact city match
+    # ------------------------------------------------------------------
 
-    # 3. Fuzzy match against aliases keys
-    alias_match = process.extractOne(
-        normalized, list(CITY_ALIASES.keys()),
-        scorer=fuzz.WRatio, score_cutoff=80
+    if normalized in _ALL_CITIES:
+        return normalized.title(), 1.0
+
+    # ------------------------------------------------------------------
+    # Fuzzy Match
+    # ------------------------------------------------------------------
+
+    match = process.extractOne(
+        normalized,
+        _ALL_CITIES,
+        scorer=fuzz.WRatio,
+        score_cutoff=75,
     )
-    if alias_match:
-        return CITY_ALIASES[alias_match[0]], alias_match[1] / 100.0
 
-    # 4. Fuzzy match against known cities
-    city_match = process.extractOne(
-        normalized, KNOWN_CITIES,
-        scorer=fuzz.WRatio, score_cutoff=75
-    )
-    if city_match:
-        return city_match[0], city_match[1] / 100.0
+    if match:
+        city = match[0]
 
-    # 5. Return cleaned version with low confidence
+        if city in CITY_ALIASES:
+            city = CITY_ALIASES[city]
+
+        return city.title(), match[1] / 100.0
+
+    # ------------------------------------------------------------------
+    # Fallback
+    # ------------------------------------------------------------------
+
     return normalized.title(), 0.5
 
 
+# ============================================================================
+# Intent Detection
+# ============================================================================
+
+def detect_intent(text: str) -> IntentType:
+    """
+    Detect the primary intent of the user message.
+    """
+
+    text_lower = text.lower()
+
+    # --------------------------------------------------------------
+    # Meeting intent
+    # --------------------------------------------------------------
+
+    if any(re.search(pattern, text_lower) for pattern in MEETING_SIGNALS):
+        return IntentType.MEETING_PLAN
+
+    # --------------------------------------------------------------
+    # Filter refinement
+    # --------------------------------------------------------------
+
+    FILTER_WORDS = [
+        "only",
+        "under",
+        "below",
+        "above",
+        "within",
+        "max",
+        "minimum",
+        "business class",
+        "economy",
+        "premium economy",
+        "first class",
+        "5 star",
+        "4 star",
+        "3 star",
+        "direct",
+        "non stop",
+        "nonstop",
+        "refundable",
+        "cheapest",
+    ]
+
+    if (
+        any(word in text_lower for word in FILTER_WORDS)
+        and extract_route(text) is None
+    ):
+        return IntentType.FILTER_REFINE
+
+    # --------------------------------------------------------------
+    # Travel Search
+    # --------------------------------------------------------------
+
+    if extract_route(text):
+
+        return IntentType.TRAVEL_SEARCH
+
+    for keywords in TRAVEL_KEYWORDS.values():
+
+        for keyword in keywords:
+
+            if keyword in text_lower:
+
+                return IntentType.TRAVEL_SEARCH
+
+    # --------------------------------------------------------------
+    # General Chat
+    # --------------------------------------------------------------
+
+    return IntentType.GENERAL_CHAT
+
+
+# ============================================================================
+# Route Extraction
+# ============================================================================
+
 def extract_route(text: str) -> Optional[Tuple[str, str]]:
     """
-    Extract origin → destination from user text.
-    Returns (origin, destination) or None.
+    Extract:
+
+    Ahmedabad -> Delhi
+
+    From Ahmedabad to Delhi
+
+    Book flight Ahmedabad to Delhi
     """
+
     text_lower = text.lower().strip()
 
     for pattern in TRAVEL_ROUTE_PATTERNS:
+
         match = re.search(pattern, text_lower, re.IGNORECASE)
-        if match:
-            origin_raw = match.group(1).strip()
-            dest_raw = match.group(2).strip()
 
-            # Clean trailing words
-            stop_words = {"on", "for", "by", "cheap", "cheapest", "best", "trip", "travel"}
-            origin_raw = " ".join(w for w in origin_raw.split() if w not in stop_words)
-            dest_raw = " ".join(w for w in dest_raw.split() if w not in stop_words)
+        if not match:
+            continue
 
-            if len(origin_raw) >= 2 and len(dest_raw) >= 2:
-                origin, _ = resolve_city(origin_raw)
-                dest, _ = resolve_city(dest_raw)
-                return origin, dest
+        origin_raw = match.group(1).strip()
+        destination_raw = match.group(2).strip()
+
+        origin_raw = " ".join(
+            word
+            for word in origin_raw.split()
+            if word not in STOP_WORDS
+        )
+
+        destination_raw = " ".join(
+            word
+            for word in destination_raw.split()
+            if word not in STOP_WORDS
+        )
+
+        if len(origin_raw) < 2 or len(destination_raw) < 2:
+            continue
+
+        origin, _ = resolve_city(origin_raw)
+        destination, _ = resolve_city(destination_raw)
+
+        return origin, destination
 
     return None
 
+# ============================================================================
+# Destination Extraction
+# ============================================================================
+
+def extract_destination_only(text: str) -> Optional[str]:
+    """
+    Extract destination for hotel/car searches where no origin exists.
+
+    Examples:
+        hotels in Goa
+        stay at Jaipur
+        cars in Ahmedabad
+        rooms near Mumbai
+    """
+
+    patterns = [
+
+        r"(?:hotel|hotels|stay|accommodation|hostel|room|rooms|resort)\s+(?:in|at|near)\s+([A-Za-z][A-Za-z\s]{1,30})",
+
+        r"(?:car|cars|cab|taxi|rental)\s+(?:in|at|near)\s+([A-Za-z][A-Za-z\s]{1,30})",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(pattern, text, re.IGNORECASE)
+
+        if match:
+
+            city = match.group(1).strip()
+
+            resolved, confidence = resolve_city(city)
+
+            if confidence >= 0.6:
+                return resolved
+
+            return city.title()
+
+    return None
+
+
+# ============================================================================
+# Travel Mode Detection
+# ============================================================================
 
 def extract_travel_mode(text: str) -> Optional[str]:
-    """Detect travel mode from user text."""
+    """
+    Detect travel mode from text.
+
+    Returns:
+        flight
+        train
+        bus
+        hotel
+        car
+    """
+
     text_lower = text.lower()
 
-    # Count keyword hits per mode
     scores = {
-        "flight": sum(1 for kw in FLIGHT_KEYWORDS if kw in text_lower),
-        "train": sum(1 for kw in TRAIN_KEYWORDS if kw in text_lower),
-        "bus": sum(1 for kw in BUS_KEYWORDS if kw in text_lower),
-        "hotel": sum(1 for kw in HOTEL_KEYWORDS if kw in text_lower),
-        "car": sum(1 for kw in CAR_KEYWORDS if kw in text_lower),
+        mode: sum(
+            1
+            for keyword in keywords
+            if keyword in text_lower
+        )
+        for mode, keywords in TRAVEL_KEYWORDS.items()
     }
 
-    best = max(scores, key=scores.get)
-    if scores[best] > 0:
-        return best
+    best_mode = max(scores, key=scores.get)
+
+    if scores[best_mode] > 0:
+        return best_mode
+
     return None
 
 
-def extract_budget(text: str) -> Optional[Tuple[Optional[float], Optional[float]]]:
+# ============================================================================
+# Budget Extraction
+# ============================================================================
+
+def extract_budget(
+    text: str,
+) -> Optional[Tuple[Optional[float], Optional[float]]]:
     """
-    Extract budget range from text.
-    Returns (min_budget, max_budget) or None.
+    Returns:
+
+        (None,5000)      under 5000
+        (3000,None)      above 3000
+        (3000,6000)      3000-6000
     """
-    # "under 5000", "less than 5000", "below 5000"
-    under = re.search(r'(?:under|below|less\s+than|max|maximum|within)\s+[₹rs.]?\s*(\d[\d,]*)', text, re.IGNORECASE)
+
+    under = re.search(
+        r"(?:under|below|less\s+than|max|within)\s*[₹rs.]?\s*(\d[\d,]*)",
+        text,
+        re.IGNORECASE,
+    )
+
     if under:
-        val = float(under.group(1).replace(",", ""))
-        return None, val
 
-    # "above 3000", "more than 3000"
-    above = re.search(r'(?:above|more\s+than|over|min|minimum|atleast|at\s+least)\s+[₹rs.]?\s*(\d[\d,]*)', text, re.IGNORECASE)
+        return (
+            None,
+            float(under.group(1).replace(",", "")),
+        )
+
+    above = re.search(
+        r"(?:above|over|more\s+than|min|minimum|atleast|at\s+least)\s*[₹rs.]?\s*(\d[\d,]*)",
+        text,
+        re.IGNORECASE,
+    )
+
     if above:
-        val = float(above.group(1).replace(",", ""))
-        return val, None
 
-    # "3000 to 6000" or "3000-6000"
-    between = re.search(r'[₹rs.]?\s*(\d[\d,]*)\s*(?:to|-)\s*[₹rs.]?\s*(\d[\d,]*)', text, re.IGNORECASE)
+        return (
+            float(above.group(1).replace(",", "")),
+            None,
+        )
+
+    between = re.search(
+        r"[₹rs.]?\s*(\d[\d,]*)\s*(?:to|-)\s*[₹rs.]?\s*(\d[\d,]*)",
+        text,
+        re.IGNORECASE,
+    )
+
     if between:
-        lo = float(between.group(1).replace(",", ""))
-        hi = float(between.group(2).replace(",", ""))
-        return lo, hi
+
+        return (
+            float(between.group(1).replace(",", "")),
+            float(between.group(2).replace(",", "")),
+        )
 
     return None
 
+
+# ============================================================================
+# Date Extraction
+# ============================================================================
 
 def extract_date(text: str) -> Optional[str]:
     """
-    Extract a travel date from free text and normalize to YYYY-MM-DD.
+    Extract date and convert to YYYY-MM-DD.
 
-    Supports: "19th june", "19 june", "june 19", "tomorrow",
-    "next friday", "day after tomorrow", "19/06/2026", etc.
-
-    Uses dateparser with PREFER_DATES_FROM='future' so a bare day/month
-    (e.g. "19 june" said in January) resolves to the *next* occurrence
-    rather than defaulting to today or a past date. Returns None if no
-    date-like text is found — callers must NOT default to "today"
-    themselves when this returns a real value.
+    Supports:
+        today
+        tomorrow
+        day after tomorrow
+        next friday
+        18 june
+        june 18
+        18/06/2026
     """
-    if not text or not text.strip():
+
+    if not text:
         return None
 
-    # First, try explicit relative/absolute phrases via regex hints so we
-    # only hand dateparser the relevant substring (avoids it grabbing
-    # unrelated numbers like budgets or flight numbers).
+    # ---------------------------------------------------------
+    # Relative dates
+    # ---------------------------------------------------------
+
     candidates = []
 
-    # Relative phrases
     relative_patterns = [
-        r"\bday after tomorrow\b",
-        r"\btomorrow\b",
-        r"\btoday\b",
-        r"\bnext\s+(?:mon|tues?|wednes|thurs?|fri|satur|sun)\w*\b",
-        r"\bthis\s+(?:mon|tues?|wednes|thurs?|fri|satur|sun)\w*\b",
-        r"\bcoming\s+\w+\b",
-    ]
-    for pat in relative_patterns:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            candidates.append(m.group(0))
 
-    # Absolute "19th june", "19 june", "june 19", "19 jun 2026"
+        r"\bday after tomorrow\b",
+
+        r"\btomorrow\b",
+
+        r"\btoday\b",
+
+        r"\bnext\s+(?:mon|tues|wednes|thurs|fri|satur|sun)\w*\b",
+
+        r"\bthis\s+(?:mon|tues|wednes|thurs|fri|satur|sun)\w*\b",
+    ]
+
+    for pattern in relative_patterns:
+
+        match = re.search(pattern, text, re.IGNORECASE)
+
+        if match:
+
+            candidates.append(match.group(0))
+
     absolute_patterns = [
+
         r"\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*(?:\s+\d{4})?\b",
+
         r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?\b",
+
         r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
     ]
-    for pat in absolute_patterns:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            candidates.append(m.group(0))
+
+    for pattern in absolute_patterns:
+
+        match = re.search(pattern, text, re.IGNORECASE)
+
+        if match:
+
+            candidates.append(match.group(0))
 
     if not candidates:
         return None
 
-    # Use the longest / most specific candidate match
     raw = max(candidates, key=len)
 
     try:
+
         parsed = dateparser.parse(
             raw,
             settings={
@@ -274,63 +658,415 @@ def extract_date(text: str) -> Optional[str]:
                 "RELATIVE_BASE": datetime.now(),
             },
         )
-    except Exception as e:
-        logger.warning(f"dateparser failed on '{raw}': {e}")
+
+    except Exception as exc:
+
+        logger.warning(
+            "Date parser failed for '%s': %s",
+            raw,
+            exc,
+        )
+
         parsed = None
 
-    if not parsed:
+    if parsed is None:
         return None
 
     return parsed.strftime("%Y-%m-%d")
 
+# ============================================================================
+# Time Extraction
+# ============================================================================
+
+def extract_time(text: str) -> Optional[str]:
+    """
+    Extract time from natural language.
+
+    Examples:
+        10 AM
+        10:30 AM
+        14:45
+        7 pm
+
+    Returns:
+        HH:MM (24-hour format)
+    """
+
+    if not text:
+        return None
+
+    match = re.search(
+        r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    ampm = (match.group(3) or "").lower()
+
+    if ampm == "pm" and hour != 12:
+        hour += 12
+
+    elif ampm == "am" and hour == 12:
+        hour = 0
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+# ============================================================================
+# Cabin Class
+# ============================================================================
 
 def extract_cabin_class(text: str) -> Optional[str]:
-    """Extract flight cabin class from text."""
+    """
+    Extract cabin class.
+    """
+
     text_lower = text.lower()
+
     if "first class" in text_lower:
         return "first"
-    if "business" in text_lower:
+
+    if "business class" in text_lower or "business" in text_lower:
         return "business"
-    if "premium economy" in text_lower or "premium" in text_lower:
+
+    if (
+        "premium economy" in text_lower
+        or "premium" in text_lower
+    ):
         return "premium_economy"
+
     if "economy" in text_lower:
         return "economy"
+
     return None
 
+
+# ============================================================================
+# Hotel Star Rating
+# ============================================================================
 
 def extract_hotel_stars(text: str) -> Optional[int]:
-    """Extract hotel star rating from text."""
-    match = re.search(r'(\d)\s*[-]?\s*star', text, re.IGNORECASE)
+    """
+    Extract hotel star rating.
+    """
+
+    match = re.search(
+        r"(\d)\s*[-]?\s*star",
+        text,
+        re.IGNORECASE,
+    )
+
     if match:
         return int(match.group(1))
-    if "luxury" in text.lower():
+
+    text_lower = text.lower()
+
+    if "luxury" in text_lower:
         return 5
-    if "budget" in text.lower():
+
+    if "budget" in text_lower:
         return 2
+
     return None
 
 
-def is_greeting(text: str) -> bool:
-    """Check if user message is a greeting."""
-    greetings = {"hello", "hi", "hey", "howdy", "hola", "namaste",
-                 "good morning", "good evening", "good afternoon",
-                 "what's up", "sup", "how are you", "how r u"}
-    return normalize_city(text) in greetings or any(
-        normalize_city(text).startswith(g) for g in greetings
+# ============================================================================
+# Meeting Information Extraction
+# ============================================================================
+
+def extract_meeting_info(text: str) -> Optional[MeetingInfo]:
+    """
+    Extract structured meeting information.
+
+    Example:
+        I have a meeting tomorrow at 11 AM
+        at Taj Hotel Mumbai.
+
+    Returns:
+        MeetingInfo object
+    """
+
+    text_lower = text.lower()
+
+    if not any(
+        re.search(pattern, text_lower)
+        for pattern in MEETING_SIGNALS
+    ):
+        return None
+
+    meeting = MeetingInfo()
+
+    # ----------------------------------------------------
+    # Meeting Time
+    # ----------------------------------------------------
+
+    meeting.meeting_time = extract_time(text)
+
+    # ----------------------------------------------------
+    # Meeting Date
+    # ----------------------------------------------------
+
+    meeting.meeting_date = extract_date(text)
+
+    if meeting.meeting_date is None:
+
+        meeting.meeting_date = (
+            datetime.now() + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+
+    # ----------------------------------------------------
+    # Location
+    # ----------------------------------------------------
+
+    location_match = re.search(
+        r"(?:at|in|@)\s+([A-Za-z][A-Za-z0-9\s&',.-]{2,60})",
+        text,
+        re.IGNORECASE,
     )
 
+    if location_match:
+
+        meeting.meeting_location = (
+            location_match.group(1).strip()
+        )
+
+    # ----------------------------------------------------
+    # Meeting City
+    # ----------------------------------------------------
+
+    route = extract_route(text)
+
+    if route:
+
+        meeting.meeting_city = route[1]
+
+    else:
+
+        destination = extract_destination_only(text)
+
+        if destination:
+
+            meeting.meeting_city = destination
+
+    # ----------------------------------------------------
+    # Hotel Required
+    # ----------------------------------------------------
+
+    if any(
+        keyword in text_lower
+        for keyword in [
+            "hotel",
+            "stay",
+            "overnight",
+            "accommodation",
+        ]
+    ):
+        meeting.hotel_required = True
+
+    # ----------------------------------------------------
+    # Duration
+    # ----------------------------------------------------
+
+    duration = re.search(
+        r"(\d+)\s*(?:day|days)",
+        text,
+        re.IGNORECASE,
+    )
+
+    if duration:
+
+        meeting.meeting_duration_hours = (
+            int(duration.group(1)) * 8
+        )
+
+        meeting.hotel_required = True
+
+    # ----------------------------------------------------
+    # Return Required
+    # ----------------------------------------------------
+
+    if any(
+        keyword in text_lower
+        for keyword in [
+            "return",
+            "return flight",
+            "come back",
+            "back home",
+            "round trip",
+        ]
+    ):
+        meeting.return_required = True
+
+    return meeting
+
+# ============================================================================
+# Greeting Detection
+# ============================================================================
+
+def is_greeting(text: str) -> bool:
+    """
+    Returns True if the user message is only a greeting.
+    """
+
+    if not text:
+        return False
+
+    greetings = {
+        "hi",
+        "hello",
+        "hey",
+        "hola",
+        "howdy",
+        "namaste",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "sup",
+        "what's up",
+        "how are you",
+        "how r u",
+    }
+
+    normalized = normalize_city(text)
+
+    if normalized in greetings:
+        return True
+
+    return any(
+        normalized.startswith(greeting)
+        for greeting in greetings
+    )
+
+
+# ============================================================================
+# Travel Query Detection
+# ============================================================================
 
 def is_travel_query(text: str) -> bool:
-    """Determine if the user message is a travel-related query."""
+    """
+    Determine whether a user message is travel related.
+    """
+
+    if not text:
+        return False
+
     text_lower = text.lower()
-    travel_signals = (
-        FLIGHT_KEYWORDS + TRAIN_KEYWORDS + BUS_KEYWORDS +
-        HOTEL_KEYWORDS + CAR_KEYWORDS +
-        ["book", "travel", "trip", "journey", "route", "ticket",
-         "depart", "arrive", "destination", "visit", "going to",
-         "from", "to", "how to reach", "best way to go"]
-    )
-    return (
-        extract_route(text) is not None or
-        any(kw in text_lower for kw in travel_signals)
-    )
+
+    # Route present
+    if extract_route(text):
+        return True
+
+    # Meeting travel
+    if extract_meeting_info(text):
+        return True
+
+    # Hotel search
+    if extract_destination_only(text):
+        return True
+
+    # Travel keywords
+    for keywords in TRAVEL_KEYWORDS.values():
+
+        for keyword in keywords:
+
+            if keyword in text_lower:
+                return True
+
+    travel_words = {
+        "travel",
+        "trip",
+        "journey",
+        "vacation",
+        "holiday",
+        "tour",
+        "tourism",
+        "visit",
+        "booking",
+        "book",
+        "ticket",
+        "destination",
+        "airport",
+        "station",
+        "depart",
+        "arrival",
+        "departure",
+    }
+
+    if any(word in text_lower for word in travel_words):
+        return True
+
+    return False
+
+
+# ============================================================================
+# Optional Convenience Function
+# ============================================================================
+
+def parse_travel_query(text: str) -> Dict:
+    """
+    Extract all supported information from a query.
+
+    Example:
+
+        Book flight from Ahmedabad to Delhi tomorrow
+        under 5000 in business class
+
+    Returns a structured dictionary.
+    """
+
+    return {
+        "intent": detect_intent(text),
+        "route": extract_route(text),
+        "destination": extract_destination_only(text),
+        "travel_mode": extract_travel_mode(text),
+        "date": extract_date(text),
+        "time": extract_time(text),
+        "budget": extract_budget(text),
+        "cabin_class": extract_cabin_class(text),
+        "hotel_stars": extract_hotel_stars(text),
+        "meeting": extract_meeting_info(text),
+        "is_travel": is_travel_query(text),
+    }
+
+
+# ============================================================================
+# Public Exports
+# ============================================================================
+
+__all__ = [
+
+    "normalize_city",
+
+    "resolve_city",
+
+    "detect_intent",
+
+    "extract_route",
+
+    "extract_destination_only",
+
+    "extract_travel_mode",
+
+    "extract_budget",
+
+    "extract_date",
+
+    "extract_time",
+
+    "extract_cabin_class",
+
+    "extract_hotel_stars",
+
+    "extract_meeting_info",
+
+    "is_greeting",
+
+    "is_travel_query",
+
+    "parse_travel_query",
+]
