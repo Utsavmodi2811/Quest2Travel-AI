@@ -434,6 +434,8 @@ class TrainsClient:
                 headers=_ih(),
                 params={"fromStationCode": from_code, "toStationCode": to_code, "dateOfJourney": irctc_date},
             )
+            print("Train Status:", r.status_code)
+            print("Train Response:", r.text[:500])
             r.raise_for_status()
             data = r.json()
 

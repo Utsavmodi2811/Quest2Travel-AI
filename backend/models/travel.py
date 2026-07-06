@@ -153,6 +153,15 @@ class MeetingInfo(BaseModel):
     hotel_required: bool = False
 
     traveller_count: int = 1
+    # Adaptive gathering state
+    gathering_state: Optional[Dict[str, Any]] = None
+    gathering_complete: bool = False
+
+    # User-selected travel preferences
+    outbound_mode: Optional[str] = None      # flight/train/bus/car/any
+    return_mode: Optional[str] = None
+    outbound_class: Optional[str] = None     # economy/business/sleeper/3ac
+    return_date: Optional[str] = None
 
 
 # ============================================================================

@@ -120,7 +120,16 @@ class ConversationMemory:
         if company_id: ctx.company_id = company_id
 
         # ── Meeting extraction (Feature 1) ─────────────────────────────────────
-        meeting_info = extract_meeting_info(user_message)
+        meeting_info = None
+
+        # Only extract a NEW meeting if we don't already have one
+        if not (
+            ctx.meeting
+            and ctx.meeting.gathering_state
+            and not ctx.meeting.gathering_complete
+        ):
+            meeting_info = extract_meeting_info(user_message)
+
         if meeting_info:
             # Merge with existing meeting context
             if ctx.meeting:
@@ -220,6 +229,15 @@ class ConversationMemory:
 
         # ── Additive filters ──────────────────────────────────────────────────
         mode = extract_travel_mode(user_message)
+        # Don't overwrite mode while gathering
+        if not (
+            ctx.meeting
+            and ctx.meeting.gathering_state
+            and not ctx.meeting.gathering_complete
+        ):
+            mode = extract_travel_mode(user_message)
+        else:
+            mode = None
         if mode:
             ctx.mode          = TravelMode(mode)
             ctx.active_filter = TravelMode(mode)

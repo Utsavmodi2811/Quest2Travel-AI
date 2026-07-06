@@ -219,6 +219,8 @@ class FlightsClient:
                 headers=_headers(),
                 params=params,
             )
+            print("Status:", resp.status_code)
+            print("Response:", resp.text[:500])
             resp.raise_for_status()
             data = resp.json()
 

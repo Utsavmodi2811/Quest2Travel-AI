@@ -752,7 +752,15 @@ class TrainsClient:
             runs_on = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
         if not runs_on:
-            runs_on = day_map[1:] + [day_map[0]]  # Mon-Sun
+            runs_on = [
+                "Mon",
+                "Tue",
+                "Wed",
+                "Thu",
+                "Fri",
+                "Sat",
+                "Sun",
+            ]  # Mon-Sun
 
         # Classes
         # Classes

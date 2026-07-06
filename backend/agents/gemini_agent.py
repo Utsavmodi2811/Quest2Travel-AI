@@ -13,25 +13,35 @@ from models.travel import TravelContext, TravelMode, JourneyPlan, MeetingInfo, I
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are Quest2Travel, an intelligent corporate travel assistant for India.
-
-You help users:
-1. Plan complete journeys for business meetings (flight + cab + hotel + return)
-2. Search flights, trains, buses, hotels, and car rentals
-3. Answer travel questions about India
-
-CRITICAL RULES:
-- The UI already shows full result cards. NEVER list individual flight numbers, hotel names, or train schedules.
-- When search results are given, respond with ONE concise summary sentence per category:
-    Flights: "Found 8 flights. Cheapest non-stop is ₹4,299 on IndiGo. See cards below."
-    Hotels:  "Found 6 hotels near your venue. Closest is 0.8 km away at ₹4,200/night."
-    Trains:  "Found 5 trains. Sleeper from ₹480. See cards below."
-    Cars:    "6 cars available from ₹799/day. See cards below."
-- If zero results after filtering, say so plainly and suggest loosening the filter.
-- For meeting planning, present the FULL timeline in a clear step-by-step format.
+ 
+You help users plan complete business journeys — flights, trains, buses, hotels, cab transfers, and return trips.
+ 
+INFORMATION GATHERING RULES:
+When a user mentions a meeting or business trip, you gather ALL necessary information
+by asking ONE question at a time. Never ask multiple questions at once.
+After each answer, ask the next most important missing question.
+Questions to ask (in order of priority, skip if already known):
+  1. Outbound travel mode (flight / train / bus / car / any)
+  2. One-way or round trip?
+  3. If round trip: return date and preferred time
+  4. If round trip: return travel mode (may differ from outbound)
+  5. Hotel needed? (yes/no)
+  6. If hotel: how many nights / check-out date
+  7. Any other preferences (class, budget, hotel rating) — optional
+ 
+RESULT SUMMARY RULES (when cards are shown below your message):
+- NEVER list individual flight numbers, hotel names, or train schedules — the UI cards do that.
+- Summarize in ONE sentence per category:
+    "Found 8 flights. Cheapest ₹4,299. See cards below."
+    "6 hotels near your venue. Closest 0.8 km, from ₹4,200/night."
+- For journey plans, present the full timeline clearly step by step.
+- If zero results after filtering, say so and suggest loosening the filter.
 - Always acknowledge company subscription limits if a service is restricted.
-- Use ₹ for prices. Be concise and professional.
-- When the user mentions they are in a city, acknowledge it and confirm you've noted it.
-- If you need the user's current city and don't have it, ask ONCE and remember it for the conversation.
+ 
+OTHER RULES:
+- Use ₹ for Indian prices. Be concise and professional.
+- Remember all trip details within a conversation — never ask for them again.
+- When user says "plan my trip" or all info is gathered, confirm with a summary then build the plan.
 """
 
 
@@ -82,7 +92,12 @@ class GeminiAgent:
                              f"Legs: {len(journey_plan.legs)}\n"
                              f"Present the timeline clearly to the user.]")
             if travel_results is not None:
-                parts.append(f"\n[Search stats — SUMMARIZE ONLY:\n{self._summarize(travel_results)}\n]")
+                parts.append(
+                    "\nTravel results are already displayed as cards."
+                    "\nDo NOT summarize search results."
+                    "\nDo NOT mention number of flights/trains/hotels."
+                    "\nOnly answer the user's question or give useful travel advice."
+                )
 
             chat = self._model.start_chat(history=history[:-1] if history else [])
             response = await chat.send_message_async("\n".join(parts))
@@ -248,9 +263,11 @@ class GeminiAgent:
                 return f"Found **{len(results['hotels'])} hotels**. Starting at {cheapest}/night{meeting_note}. See cards below.{mock_note}"
 
             if results.get("trains"):
-                all_p = [c["price"] for t in results["trains"] for c in t.get("classes",[]) if c.get("price")]
-                cheapest = f"₹{min(all_p):,.0f}" if all_p else "N/A"
-                return f"Found **{len(results['trains'])} trains**. Cheapest class from {cheapest}. See cards below.{mock_note}"
+                return (
+                    f"Found **{len(results['trains'])} trains**."
+                    f" Cheapest class from {cheapest}. "
+                    "See cards below."
+                )
 
             if results.get("buses"):
                 prices = [b["price"] for b in results["buses"] if b.get("price")]
@@ -273,10 +290,10 @@ class GeminiAgent:
             if ctx.meeting and ctx.meeting.meeting_time:
                 m = ctx.meeting
                 return (
-                    f"Got it! Planning your journey for the **{m.meeting_time}** meeting"
+                    f"Got it! Planning your trip for the **{m.meeting_time}** meeting"
                     f"{' at ' + m.meeting_location if m.meeting_location else ''}"
                     f"{' in ' + m.meeting_city if m.meeting_city else ''}. "
-                    f"Working out the best departure time from **{m.current_city or ctx.origin or 'your city'}**…"
+                    "Let me ask a few quick questions to understand your travel preferences."
                 )
             loc = f"{ctx.origin} to {ctx.destination}" if ctx.origin and ctx.destination else (ctx.destination or ctx.origin)
             return f"Searching for travel options for **{loc}**… Results shown below! 👇"
