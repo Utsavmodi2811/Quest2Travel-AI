@@ -114,27 +114,33 @@ class GeminiAgent:
         context: TravelContext,
         intent_type: Optional[IntentType] = None,
     ) -> List[str]:
+
+        # During meeting planning let ChatService decide suggestions
         if intent_type == IntentType.MEETING_PLAN:
-            return [
-                "Show hotel options near venue",
-                "Find return flights",
-                "What's the cab cost from airport?",
-            ]
+            return []
+
         if context.origin and context.destination:
             sugg = []
+
             if context.mode != TravelMode.FLIGHT:
                 sugg.append("Show flights")
+
             if context.mode != TravelMode.TRAIN:
                 sugg.append("Show trains")
+
             if context.mode != TravelMode.HOTEL:
                 sugg.append(f"Hotels in {context.destination}")
+
             if not context.max_budget:
-                sugg.append("Under ₹5,000")
-            return sugg[:3]
+                sugg.append("Under ₹5000")
+
+            return sugg[:4]
+
         return [
-            "Delhi to Mumbai flights tomorrow",
-            "Hotels in Goa under ₹5000",
-            "Train from Ahmedabad to Bangalore",
+            "Book a flight",
+            "Find hotels",
+            "Plan a trip",
+            "I have a meeting tomorrow",
         ]
 
     # ── Internal helpers ─────────────────────────────────────────────────────
@@ -225,6 +231,18 @@ class GeminiAgent:
 
         # Greeting
         if any(w in msg for w in ["hello", "hi", "hey", "namaste", "good morning", "good evening"]):
+            # User only replied with their home city
+            if (
+                ctx
+                and ctx.home_city
+                and not ctx.destination
+                and not ctx.meeting
+                and msg == ctx.home_city.lower()
+            ):
+                return (
+                    f"Great! I'll remember that you're based in {ctx.home_city}. "
+                    "How can I help you today?"
+                )
             home = ctx.home_city if ctx else None
             home_str = f" I see you're based in **{home}**." if home else ""
             return (
@@ -286,7 +304,9 @@ class GeminiAgent:
             )
 
         # Travel context without results yet
-        if ctx and (ctx.origin or ctx.destination or ctx.meeting):
+        # Only talk about searching when a destination exists
+        if ctx and (ctx.destination or ctx.meeting):
+
             if ctx.meeting and ctx.meeting.meeting_time:
                 m = ctx.meeting
                 return (
@@ -295,8 +315,12 @@ class GeminiAgent:
                     f"{' in ' + m.meeting_city if m.meeting_city else ''}. "
                     "Let me ask a few quick questions to understand your travel preferences."
                 )
-            loc = f"{ctx.origin} to {ctx.destination}" if ctx.origin and ctx.destination else (ctx.destination or ctx.origin)
-            return f"Searching for travel options for **{loc}**… Results shown below! 👇"
+
+            if ctx.origin and ctx.destination:
+                return (
+                    f"Searching for travel options from **{ctx.origin}** "
+                    f"to **{ctx.destination}**… Results shown below! 👇"
+                )
 
         return (
             "I'm here to help with your travel plans! "

@@ -57,6 +57,8 @@ export function useChat() {
           session_id: sessionId || undefined,
           message: text,
         });
+        console.log("BACKEND RESPONSE");
+        console.log(response.suggestions);
 
         if (!sessionId) {
           setSessionId(response.session_id);

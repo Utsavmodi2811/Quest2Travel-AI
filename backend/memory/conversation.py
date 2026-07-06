@@ -120,15 +120,13 @@ class ConversationMemory:
         if company_id: ctx.company_id = company_id
 
         # ── Meeting extraction (Feature 1) ─────────────────────────────────────
-        meeting_info = None
+        meeting_info = extract_meeting_info(user_message)
 
-        # Only extract a NEW meeting if we don't already have one
-        if not (
-            ctx.meeting
-            and ctx.meeting.gathering_state
-            and not ctx.meeting.gathering_complete
-        ):
-            meeting_info = extract_meeting_info(user_message)
+        if meeting_info:
+            if ctx.meeting:
+                meeting_info = self._merge_meeting(ctx.meeting, meeting_info)
+
+            ctx.meeting = meeting_info
 
         if meeting_info:
             # Merge with existing meeting context
@@ -204,16 +202,16 @@ class ConversationMemory:
         # NEW: if the whole message is just a city name
         # If the message is just a city name (Ahmedabad, Delhi, Mumbai)
         # don't try to resolve greetings like "Hi"
-        if (
-            not home_match
-            and not is_greeting(user_message)
-            and len(user_message.strip().split()) <= 3
-        ):
-            city, conf = resolve_city(user_message.strip())
+        # if (
+        #     not home_match
+        #     and not is_greeting(user_message)
+        #     and len(user_message.strip().split()) <= 3
+        # ):
+        #     city, conf = resolve_city(user_message.strip())
 
-            if conf >= 0.95:
-                home_match = True
-                home_city = city
+        #     if conf >= 0.95:
+        #         home_match = True
+        #         home_city = city
 
         if home_match:
             if isinstance(home_match, bool):
@@ -223,9 +221,6 @@ class ConversationMemory:
 
             if conf >= 0.8:
                 ctx.home_city = home_city
-
-                if not ctx.origin:
-                    ctx.origin = home_city
 
         # ── Additive filters ──────────────────────────────────────────────────
         mode = extract_travel_mode(user_message)
@@ -271,8 +266,10 @@ class ConversationMemory:
         if pax:
             ctx.passengers = int(pax.group(1))
 
-        if ctx.home_city or ctx.origin:
+        if ctx.home_city :
             ctx.profile_complete = True
+        if ctx.home_city and not ctx.origin:
+            ctx.origin = ctx.home_city        
             
         session.travel_context = ctx
         await self.save_session(session)

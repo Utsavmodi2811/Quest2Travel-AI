@@ -29,7 +29,7 @@ from services.journey_planner import journey_planner
 from services.permission_service import permission_service
 from services.trip_gatherer import TripGatherer, GatheringState
 from utils.nlu import detect_intent, is_travel_query
-
+from models.travel import MeetingInfo
 logger = logging.getLogger(__name__)
 
 _gatherer = TripGatherer()
@@ -81,11 +81,59 @@ class ChatService:
                 suggestions=["I'm in Delhi", "I'm in Mumbai", "I'm in Bangalore"],
             )
 
+        # User has just completed their profile.
+        # Don't continue into travel search.
+        if (
+            context.profile_complete
+            and request.message.strip().lower() == context.home_city.lower()
+        ):
+            assistant_msg = await memory.add_message(
+                role=MessageRole.ASSISTANT,
+                content=f"Great! I'll remember that you're based in {context.home_city}. How can I help you today?",
+            )
+
+            return ChatResponse(
+                session_id=session_id,
+                message_id=assistant_msg.message_id,
+                reply=f"Great! I'll remember that you're based in {context.home_city}. How can I help you today?",
+                intent_type=IntentType.GENERAL_CHAT,
+                travel_context=context,
+                suggestions=[
+                    "I have a meeting tomorrow",
+                    "Book a flight",
+                    "Find hotels",
+                    "Plan a trip",
+                ],
+            )
+
         if context.home_city and not context.profile_complete:
             context.profile_complete = True
+
             session = await memory.get_or_create_session()
-            session.travel_context.profile_complete = True
+            session.travel_context = context
             await memory.save_session(session)
+
+            assistant_msg = await memory.add_message(
+                role=MessageRole.ASSISTANT,
+                content=(
+                    f"Great! I'll remember that you're in {context.home_city}. "
+                    "How can I help you today?"
+                ),
+            )
+
+            return ChatResponse(
+                session_id=session_id,
+                message_id=assistant_msg.message_id,
+                reply=f"Great! I'll remember that you're in {context.home_city}. How can I help you today?",
+                intent_type=IntentType.GENERAL_CHAT,
+                travel_context=context,
+                suggestions=[
+                    "I have a meeting tomorrow",
+                    "Book a flight",
+                    "Find hotels",
+                    "Plan a trip",
+                ],
+            )
 
         # ── 4. Intent detection ───────────────────────────────────────────────
         if (
@@ -158,7 +206,12 @@ class ChatService:
             "Meeting exists=%s",
             context.meeting is not None,
         )
-        if intent_type == IntentType.MEETING_PLAN and context.meeting:
+
+        # Create meeting context if this is the first meeting message
+        if intent_type == IntentType.MEETING_PLAN and context.meeting is None:
+            context.meeting = MeetingInfo()# or your meeting model
+
+        if intent_type == IntentType.MEETING_PLAN:
             meeting = context.meeting
 
             # Load or create GatheringState from persisted dict
@@ -167,6 +220,31 @@ class ChatService:
 
             # Update state with what NLU / context already knows
             state = _gatherer.update_from_message(state, request.message, context)
+            # Keep TravelContext synchronized with GatheringState
+            context.origin = state.origin
+            context.destination = state.destination
+
+            if state.outbound_mode:
+                context.mode = TravelMode(state.outbound_mode)
+
+            if state.travel_date:
+                context.travel_date = state.travel_date
+            context.mode = state.outbound_mode or context.mode
+            context.travel_date = state.travel_date
+            meeting.meeting_city = state.destination
+            meeting.current_city = state.origin
+
+            if state.travel_date:
+                meeting.meeting_date = state.travel_date
+
+            if state.meeting_time:
+                meeting.meeting_time = state.meeting_time
+            meeting.gathering_state = state.to_dict()
+            context.meeting = meeting
+
+            session = await memory.get_or_create_session()
+            session.travel_context = context
+            await memory.save_session(session)
             print(state.to_dict())
             print("RETURN DATE :", state.return_date)
             print("RETURN TIME :", state.return_time)
@@ -207,7 +285,12 @@ class ChatService:
                 )
 
                 suggestions = self._gathering_suggestions(state)
-
+                print("=" * 50)
+                print("STATE")
+                print(state.to_dict())
+                print("QUESTION :", question)
+                print("SUGGESTIONS :", suggestions)
+                print("=" * 50)
                 return ChatResponse(
                     session_id=session_id,
                     message_id=assistant_msg.message_id,
@@ -311,10 +394,18 @@ class ChatService:
                 if context.meeting and not context.meeting.gathering_complete:
                     suggestions = self._gathering_suggestions(state)
                 else:
-                    suggestions = await gemini_agent.generate_suggestions(
-                        context,
-                        intent_type,
-                    )
+                    if (
+                        context.meeting
+                        and context.meeting.gathering_state
+                        and not context.meeting.gathering_complete
+                    ):
+                        state = GatheringState.from_dict(context.meeting.gathering_state)
+                        suggestions = self._gathering_suggestions(state)
+                    else:
+                        suggestions = await gemini_agent.generate_suggestions(
+                            context,
+                            intent_type,
+                        )
                 assistant_msg = await memory.add_message(
                     role=MessageRole.ASSISTANT,
                     content=full_reply,
@@ -338,6 +429,15 @@ class ChatService:
                 )
 
         # ── 7. Plain travel search / filter refinement ────────────────────────
+        print("=" * 60)
+        print("SHOULD SEARCH CHECK")
+        print("Message      :", request.message)
+        print("Intent       :", intent_type)
+        print("Origin       :", context.origin)
+        print("Destination  :", context.destination)
+        print("Mode         :", context.mode)
+        print("Travel Query :", is_travel_query(request.message))
+        print("=" * 60)
         should_search = (
             intent_type != IntentType.MEETING_PLAN
             and (
@@ -403,6 +503,8 @@ class ChatService:
     # ── Suggestion helpers ────────────────────────────────────────────────────
 
     def _gathering_suggestions(self, state):
+        print("INSIDE _gathering_suggestions")
+        print(state.to_dict())
 
         if not state.origin:
             return [
@@ -413,19 +515,32 @@ class ChatService:
             ]
 
         if not state.destination:
-            return [
+
+            cities = [
                 "Delhi",
                 "Mumbai",
-                "Ahmedabad",
                 "Bangalore",
+                "Hyderabad",
+                "Ahmedabad",
+                "Pune",
+                "Chennai",
+                "Goa",
             ]
+
+            if state.origin:
+                cities = [
+                    c for c in cities
+                    if c.lower() != state.origin.lower()
+                ]
+
+            return cities[:4]
 
         if not state.outbound_mode:
             return [
-                "✈ Flight",
-                "🚂 Train",
-                "🚌 Bus",
-                "🚗 Car",
+                "Flight",
+                "Train",
+                "Bus",
+                "Car",
             ]
 
         if not state.trip_type:
@@ -447,6 +562,7 @@ class ChatService:
                 "Flight",
                 "Train",
                 "Bus",
+                "Car",
             ]
 
         if _gatherer.should_ask_hotel(state):

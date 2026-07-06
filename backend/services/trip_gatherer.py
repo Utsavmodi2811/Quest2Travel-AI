@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
-
+from utils.nlu import(extract_hotel_stars,resolve_city,)
 from models.travel import MeetingInfo, TravelContext, TravelMode
 
 logger = logging.getLogger(__name__)
@@ -143,12 +143,30 @@ class TripGatherer:
         Also copies over anything already known from TravelContext.
         """
         msg = message.strip().lower()
+        question = self.next_question(state)
 
+        city, conf = resolve_city(message.strip())
+
+        if conf >= 0.9:
+            if "origin" in question.lower() or "currently in" in question.lower():
+                state.origin = city
+
+            elif "destination" in question.lower() or "meeting" in question.lower():
+                state.destination = city
         # Sync from context (NLU already parsed routes, dates, etc.)
         if context.origin and not state.origin:
             state.origin = context.origin
-        if context.destination and not state.destination:
+        if context.origin:
+            state.origin = context.origin
+
+        if context.destination:
             state.destination = context.destination
+
+        if context.travel_date:
+            state.travel_date = context.travel_date
+
+        if context.meeting and context.meeting.meeting_time:
+            state.meeting_time = context.meeting.meeting_time
         if context.travel_date and not state.travel_date:
             state.travel_date = context.travel_date
         if context.meeting and context.meeting.meeting_time and not state.meeting_time:
@@ -156,10 +174,10 @@ class TripGatherer:
         # Sync destination from meeting
         if (
             context.meeting
-            and context.meeting.meeting_location
+            and context.meeting.meeting_city
             and not state.destination
         ):
-            state.destination = context.meeting.meeting_location.rstrip(".")
+            state.destination = context.meeting.meeting_city
         if context.home_city and not state.origin:
             state.origin = context.home_city
         if context.max_budget and not state.budget_max:
@@ -193,8 +211,14 @@ class TripGatherer:
                 # Still ask hotel later
                 if state.hotel_needed is None:
                     state.hotel_needed = None
-            elif any(w in msg for w in ["round", "return", "come back", "both ways",
-                                         "two way", "two-way"]):
+            elif any(w in msg for w in [
+                "round trip",
+                "round-trip",
+                "both ways",
+                "return trip",
+                "two way",
+                "two-way"
+            ]):
                 state.trip_type = "round_trip"
 
         # ── Return details ─────────────────────────────────────────────────────
@@ -247,39 +271,31 @@ class TripGatherer:
                         state.return_mode = rm
 
         # ── Hotel ──────────────────────────────────────────────────────────────
-        if state.hotel_needed is None:
-            if any(
-                w in msg
-                for w in [
-                    "hotel",
-                    "accommodation",
-                    "room",
-                    "stay"
-                ]
-            ):
 
-                if any(
-                    x in msg
-                    for x in [
-                        "need",
-                        "book",
-                        "yes"
-                    ]
-                ):
-                    state.hotel_needed = True
+        if state.hotel_needed is None and state.asked_hotel:
 
-                elif any(
-                    x in msg
-                    for x in [
-                        "no",
-                        "don't",
-                        "not"
-                    ]
-                ):
-                    state.hotel_needed = False
+            if any(x in msg for x in [
+                "yes",
+                "yeah",
+                "yep",
+                "need",
+                "book"
+            ]):
+                state.hotel_needed = True
+
+            elif any(x in msg for x in [
+                "no",
+                "nope",
+                "nah",
+                "don't",
+                "dont",
+                "not",
+                "not needed",
+                "no hotel"
+            ]):
                 # Only treat as hotel confirmation if we actually asked
                 if state.asked_hotel:
-                    state.hotel_needed = True
+                    state.hotel_needed = False
             elif any(w in msg for w in ["no hotel", "no accommodation", "not staying",
                                           "won't stay", "no stay", "no thanks",
                                           "not needed", "nope", "no need"]):
@@ -307,7 +323,7 @@ class TripGatherer:
 
         # ── Hotel stars ────────────────────────────────────────────────────────
         if not state.hotel_stars:
-            from utils.nlu import extract_hotel_stars
+             
             stars = extract_hotel_stars(message)
             if stars:
                 state.hotel_stars = stars
@@ -380,11 +396,8 @@ class TripGatherer:
             return "Which city are you currently in / travelling from?"
 
         # Destination
-        if (
-            not state.destination
-            and not state.meeting_city
-        ):
-            return "Which city is your meeting in?"
+        if not state.destination:
+            return "What is your destination city for this business trip?"
 
         # Outbound date
         if not state.travel_date:
