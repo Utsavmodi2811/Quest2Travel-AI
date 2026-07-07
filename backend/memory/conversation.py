@@ -201,9 +201,15 @@ class ConversationMemory:
             user_message,
             re.IGNORECASE,
         )
+        meeting_in_progress = (
+            ctx.meeting is not None
+            and not ctx.meeting.gathering_complete
+)
         # If the user simply typed a city name like "Ahmedabad"
         if (
-            not home_match
+            not meeting_in_progress
+            and not ctx.profile_complete
+            and not home_match
             and len(user_message.strip().split()) <= 3
         ):
             city, conf = resolve_city(user_message.strip())
@@ -227,7 +233,7 @@ class ConversationMemory:
         #         home_match = True
         #         home_city = city
 
-        if home_match:
+        if home_match and not meeting_in_progress:
             home_city, conf = resolve_city(home_match.group(1).strip())
 
             if conf >= 0.80:
@@ -286,6 +292,16 @@ class ConversationMemory:
             
         session.travel_context = ctx
         await self.save_session(session)
+        print("=" * 50)
+        print("HOME CITY :", ctx.home_city)
+        print("ORIGIN    :", ctx.origin)
+        print("DEST      :", ctx.destination)
+
+        if ctx.meeting:
+            print("CURRENT CITY :", ctx.meeting.current_city)
+            print("MEETING CITY :", ctx.meeting.meeting_city)
+
+        print("=" * 50)
         return ctx
 
     async def get_context(self) -> TravelContext:

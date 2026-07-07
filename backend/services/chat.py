@@ -242,8 +242,12 @@ class ChatService:
             # Update state with what NLU / context already knows
             state = _gatherer.update_from_message(state, request.message, context)
             print("=" * 80)
-            print("AFTER UPDATE")
-            print(state.to_dict())
+            print("STATE AFTER UPDATE")
+            print("Origin      :", state.origin)
+            print("Destination :", state.destination)
+            print("Context Home:", context.home_city)
+            print("Context Orig:", context.origin)
+            print("Context Dest:", context.destination)
             print("=" * 80)
             # Keep TravelContext synchronized with GatheringState
             context.origin = state.origin
