@@ -412,8 +412,22 @@ def extract_route(text: str) -> Optional[Tuple[str, str]]:
 
     Book flight Ahmedabad to Delhi
     """
-
     text_lower = text.lower().strip()
+    # Ignore trip-type messages
+    if text_lower in {
+        "one-way",
+        "one way",
+        "round trip",
+        "round-trip",
+    }:
+        return None
+    
+
+    if re.fullmatch(
+        r"(one[\s-]?way|round[\s-]?trip)",
+        text_lower,
+    ):
+        return None
 
     for pattern in TRAVEL_ROUTE_PATTERNS:
 
@@ -424,7 +438,15 @@ def extract_route(text: str) -> Optional[Tuple[str, str]]:
 
         origin_raw = match.group(1).strip()
         destination_raw = match.group(2).strip()
-
+        # Ignore trip-type phrases like "one-way"
+        if (
+            f"{origin_raw.lower()}-{destination_raw.lower()}" == "one-way"
+            or (
+                origin_raw.lower() == "round"
+                and destination_raw.lower() == "trip"
+            )
+        ):
+            continue
         origin_raw = " ".join(
             word
             for word in origin_raw.split()
@@ -440,8 +462,12 @@ def extract_route(text: str) -> Optional[Tuple[str, str]]:
         if len(origin_raw) < 2 or len(destination_raw) < 2:
             continue
 
-        origin, _ = resolve_city(origin_raw)
-        destination, _ = resolve_city(destination_raw)
+        origin, origin_conf = resolve_city(origin_raw)
+        destination, dest_conf = resolve_city(destination_raw)
+
+        # Only return if both look like real cities
+        if origin_conf < 0.80 or dest_conf < 0.80:
+            continue
 
         return origin, destination
 

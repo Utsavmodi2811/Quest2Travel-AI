@@ -146,11 +146,14 @@ class ConversationMemory:
                 ctx.origin, _ = resolve_city(meeting_info.current_city)
             if meeting_info.meeting_city:
                 ctx.destination, _ = resolve_city(meeting_info.meeting_city)
-
+        print("=" * 60)
+        print("USER MESSAGE:", user_message)
         # ── Route extraction ───────────────────────────────────────────────────
         route = extract_route(user_message)
+        print("EXTRACTED ROUTE:", route)
         dest_only = extract_destination_only(user_message) if not route else None
-
+        print("DEST ONLY:", dest_only)
+        print("=" * 60)
         if route:
             new_origin, new_dest = route
             route_changed = (

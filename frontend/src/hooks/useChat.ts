@@ -53,6 +53,7 @@ export function useChat() {
       });
 
       try {
+        console.log("SENDING MESSAGE:", text);
         const response = await chatApi.sendMessage({
           session_id: sessionId || undefined,
           message: text,

@@ -377,3 +377,14 @@ Everything else (class, budget, hotel stars, dates) is additive.
 `backend/services/geocoding.py` calls Nominatim (free, no key) for every city name.
 Results are cached in MongoDB's `cached_results` collection with a 24-hour TTL.
 NO coordinates are hardcoded anywhere in the codebase.
+# Check the current status
+git status
+
+# Stage all changes
+git add .
+
+# Commit the changes
+git commit -m "Describe your changes"
+
+# Push to the current branch
+git push -u origin main

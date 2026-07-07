@@ -16,7 +16,7 @@ Full pipeline:
 import logging
 import uuid
 from typing import Optional
-
+import traceback
 from models.travel import (
     ChatRequest, ChatResponse, MessageRole, TravelMode,
     IntentType, ServiceType, JourneyPlan,
@@ -220,6 +220,10 @@ class ChatService:
 
             # Update state with what NLU / context already knows
             state = _gatherer.update_from_message(state, request.message, context)
+            print("=" * 80)
+            print("AFTER UPDATE")
+            print(state.to_dict())
+            print("=" * 80)
             # Keep TravelContext synchronized with GatheringState
             context.origin = state.origin
             context.destination = state.destination
@@ -255,6 +259,7 @@ class ChatService:
             logger.info(state.to_dict())
             logger.info("=" * 60)
             # Check if gathering is complete
+            print("CHECKING COMPLETENESS")
             if not state.is_complete():
 
                 # Ask the next question
@@ -360,15 +365,17 @@ class ChatService:
                                 session_id, context
                             )
                         except Exception as e:
-                            logger.warning(f"Card search failed: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            logger.exception(e)
+                            raise
 
                     reply = summary
                 except Exception as e:
-                    logger.error(f"Journey planning failed: {e}", exc_info=True)
-                    reply = (
-                        "I have all your trip details but ran into an issue building "
-                        "the plan. Let me try a standard search instead."
-                    )
+                    import traceback
+                    traceback.print_exc()
+                    logger.exception(e)
+                    raise
                     intent_type = IntentType.TRAVEL_SEARCH
 
                 # Persist final context
@@ -466,7 +473,10 @@ class ChatService:
                     f"{context.origin}→{context.destination}"
                 )
             except Exception as e:
-                logger.error(f"Travel search failed: {e}", exc_info=True)
+                import traceback
+                traceback.print_exc()
+                logger.exception(e)
+                raise
 
         # ── 8. Gemini response ────────────────────────────────────────────────
         history = await memory.get_conversation_history_for_gemini()
@@ -534,7 +544,13 @@ class ChatService:
                 ]
 
             return cities[:4]
-
+        if not state.meeting_time:
+            return [
+                "9 AM",
+                "10 AM",
+                "1 PM",
+                "3 PM",
+            ]
         if not state.outbound_mode:
             return [
                 "Flight",
@@ -554,6 +570,18 @@ class ChatService:
                 "Same day",
                 "Tomorrow evening",
                 "Next day",
+            ]
+
+        if (
+            state.trip_type == "round_trip"
+            and state.return_date
+            and not state.return_time
+        ):
+            return [
+                "4 PM",
+                "6 PM",
+                "8 PM",
+                "10 PM",
             ]
 
         if state.trip_type == "round_trip" and not state.return_mode:

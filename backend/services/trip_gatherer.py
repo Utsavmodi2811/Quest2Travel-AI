@@ -64,26 +64,36 @@ class GatheringState:
         return cls(**{k: v for k, v in d.items() if k in valid})
 
     def is_complete(self) -> bool:
-        """
-        True when we have enough to build a journey plan.
-        Minimum required: origin, destination, date, outbound_mode, trip_type.
-        If round_trip: also return_date + return_mode.
-        If hotel_needed is None we need to ask; True needs dates.
-        """
-        if not all([self.origin, self.destination, self.travel_date, self.outbound_mode, self.trip_type]):
+        if not all([
+            self.origin,
+            self.destination,
+            self.travel_date,
+            self.meeting_time,
+            self.outbound_mode,
+            self.trip_type
+        ]):
             return False
-        if self.trip_type == "round_trip":
-            if not self.return_date or not self.return_mode:
-                return False
-        if self.should_ask_hotel(self):
 
-            if self.hotel_needed is None:
+        if self.trip_type == "round_trip":
+            if not self.return_date:
                 return False
+
+            if not self.return_time:
+                return False
+
+            if not self.return_mode:
+                return False
+
+        # REPLACE THIS PART
+        if self.hotel_needed is None:
+            return False
+
         if self.hotel_needed:
             if not self.hotel_checkin:
                 return False
             if not self.hotel_checkout:
                 return False
+
         return True
 
 
@@ -171,6 +181,20 @@ class TripGatherer:
             state.travel_date = context.travel_date
         if context.meeting and context.meeting.meeting_time and not state.meeting_time:
             state.meeting_time = context.meeting.meeting_time
+        # ----------------------------
+        # Parse meeting time from reply
+        # ----------------------------
+        if not state.meeting_time:
+
+            from utils.nlu import extract_time
+
+            meeting_time = extract_time(message)
+
+            if meeting_time:
+                state.meeting_time = meeting_time
+
+                if context.meeting:
+                    context.meeting.meeting_time = meeting_time
         # Sync destination from meeting
         if (
             context.meeting
@@ -188,38 +212,54 @@ class TripGatherer:
         # ── Outbound mode ──────────────────────────────────────────────────────
         if not state.outbound_mode:
             mode = self._parse_travel_mode(msg)
+
+            print("=" * 50)
+            print("MESSAGE:", msg)
+            print("PARSED MODE:", mode)
+
             if mode:
                 state.outbound_mode = mode
-                # Also extract class preference if mentioned
+                print("OUTBOUND MODE SAVED:", state.outbound_mode)
+
                 cls = self._parse_class(msg, mode)
                 if cls:
                     state.outbound_class = cls
 
         # ── Trip type ──────────────────────────────────────────────────────────
         if not state.trip_type:
-            if any(w in msg for w in [
-                "one way",
-                "one-way",
-                "oneway",
-                "no return",
-                "won't return",
-                "not returning",
-                "single"
-            ]):
+
+            print("MESSAGE RECEIVED:", msg)
+
+            if any(
+                w in msg
+                for w in [
+                    "one way",
+                    "one-way",
+                    "oneway",
+                    "no return",
+                    "won't return",
+                    "not returning",
+                    "single",
+                ]
+            ):
+                print("Detected ONE WAY")
                 state.trip_type = "one_way"
 
-                # Still ask hotel later
-                if state.hotel_needed is None:
-                    state.hotel_needed = None
-            elif any(w in msg for w in [
-                "round trip",
-                "round-trip",
-                "both ways",
-                "return trip",
-                "two way",
-                "two-way"
-            ]):
+            elif any(
+                w in msg
+                for w in [
+                    "round trip",
+                    "round-trip",
+                    "both ways",
+                    "return trip",
+                    "two way",
+                    "two-way",
+                ]
+            ):
+                print("Detected ROUND TRIP")
                 state.trip_type = "round_trip"
+
+            print("TRIP TYPE =", state.trip_type)
 
         # ── Return details ─────────────────────────────────────────────────────
         if state.trip_type == "round_trip":
@@ -251,7 +291,6 @@ class TripGatherer:
                     any(
                         w in msg
                         for w in [
-                            "same",
                             "same mode",
                             "same as outbound",
                             "same as going",
@@ -269,7 +308,12 @@ class TripGatherer:
 
                     if rm:
                         state.return_mode = rm
-
+        print("=" * 50)
+        print("RETURN STATE")
+        print("return_date :", state.return_date)
+        print("return_time :", state.return_time)
+        print("return_mode :", state.return_mode)
+        print("=" * 50)
         # ── Hotel ──────────────────────────────────────────────────────────────
 
         if state.hotel_needed is None and state.asked_hotel:
@@ -402,7 +446,12 @@ class TripGatherer:
         # Outbound date
         if not state.travel_date:
             return "What date is your outbound journey? *(e.g. tomorrow, 20th June)*"
-
+        # Meeting time
+        if not state.meeting_time:
+            return (
+                "What time is your meeting? "
+                "(e.g. 10 AM, 1 PM, 3:30 PM)"
+            )
         # Outbound travel mode
         if not state.outbound_mode:
             state.asked_outbound_mode = True
@@ -417,14 +466,23 @@ class TripGatherer:
 
         # Return details (only for round trips)
         if state.trip_type == "round_trip":
+
             if not state.return_date:
                 state.asked_return_date = True
                 return RETURN_DATE_QUESTION.format(origin=state.origin)
 
+            # NEW
+            if not state.return_time:
+                return (
+                    f"What time would you like to return from "
+                    f"{state.destination} to {state.origin}?"
+                )
+
             if not state.return_mode:
                 state.asked_return_mode = True
                 return RETURN_MODE_QUESTION.format(
-                    origin=state.origin, destination=state.destination
+                    origin=state.origin,
+                    destination=state.destination,
                 )
 
         # Hotel

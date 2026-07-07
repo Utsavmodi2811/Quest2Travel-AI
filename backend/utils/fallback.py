@@ -9,7 +9,7 @@ import logging
 import functools
 from typing import Callable
 from datetime import datetime
-
+import inspect
 import httpx
 from config.settings import settings
 
@@ -87,7 +87,23 @@ def with_fallback(mock_fn: Callable):
                 f"Falling back to mock data. Last error: {type(last_exc).__name__ if last_exc else 'unknown'}: {last_exc}"
             )
             # Call mock with just the positional args (skip self)
-            return mock_fn(*args, **kwargs)
+            sig = inspect.signature(mock_fn)
+
+            filtered_kwargs = {
+                k: v
+                for k, v in kwargs.items()
+                if k in sig.parameters
+            }
+
+            allowed_positional = len([
+                p for p in sig.parameters.values()
+                if p.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+            ])
+
+            return mock_fn(*args[:allowed_positional], **filtered_kwargs)
 
         return wrapper
     return decorator
