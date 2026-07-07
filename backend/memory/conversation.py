@@ -201,6 +201,17 @@ class ConversationMemory:
             user_message,
             re.IGNORECASE,
         )
+        # If the user simply typed a city name like "Ahmedabad"
+        if (
+            not home_match
+            and len(user_message.strip().split()) <= 3
+        ):
+            city, conf = resolve_city(user_message.strip())
+
+            if conf >= 0.80:
+                ctx.home_city = city
+                ctx.origin = city
+                ctx.profile_complete = True
 
         # NEW: if the whole message is just a city name
         # If the message is just a city name (Ahmedabad, Delhi, Mumbai)
@@ -217,13 +228,12 @@ class ConversationMemory:
         #         home_city = city
 
         if home_match:
-            if isinstance(home_match, bool):
-                pass
-            else:
-                home_city, conf = resolve_city(home_match.group(1).strip())
+            home_city, conf = resolve_city(home_match.group(1).strip())
 
-            if conf >= 0.8:
+            if conf >= 0.80:
                 ctx.home_city = home_city
+                ctx.origin = home_city
+                ctx.profile_complete = True
 
         # ── Additive filters ──────────────────────────────────────────────────
         mode = extract_travel_mode(user_message)
@@ -323,6 +333,11 @@ class ConversationMemory:
         Feature 9: collect all info upfront so bot doesn't ask repeatedly.
         Returns None if profile is complete enough to proceed.
         """
+        print("=" * 50)
+        print("PROFILE COMPLETE :", ctx.profile_complete)
+        print("HOME CITY        :", ctx.home_city)
+        print("ORIGIN           :", ctx.origin)
+        print("=" * 50)
         if ctx.profile_complete:
             return None
         if not ctx.home_city and not ctx.origin:

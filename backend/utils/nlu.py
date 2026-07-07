@@ -266,7 +266,23 @@ def resolve_city(raw: str) -> Tuple[str, float]:
     3. RapidFuzz
     4. Fallback
     """
+    normalized = normalize_city(raw)
 
+    if normalized in {
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "thanks",
+        "thank you",
+        "ok",
+        "okay",
+        "yes",
+        "no",
+    }:
+        return "", 0.0
     if not raw or not raw.strip():
         return raw or "", 0.0
 
@@ -302,12 +318,13 @@ def resolve_city(raw: str) -> Tuple[str, float]:
     # ------------------------------------------------------------------
     # Fuzzy Match
     # ------------------------------------------------------------------
-
+    if len(normalized.split()) == 1 and normalized not in _ALL_CITIES:
+        return "", 0.0
     match = process.extractOne(
         normalized,
         _ALL_CITIES,
         scorer=fuzz.WRatio,
-        score_cutoff=75,
+        score_cutoff=90,
     )
 
     if match:
@@ -322,7 +339,7 @@ def resolve_city(raw: str) -> Tuple[str, float]:
     # Fallback
     # ------------------------------------------------------------------
 
-    return normalized.title(), 0.5
+    return "", 0.0
 
 
 # ============================================================================

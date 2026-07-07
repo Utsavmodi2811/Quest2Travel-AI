@@ -48,7 +48,11 @@ quest2travel/
 │   ├── services/
 │   │   ├── chat.py               # Chat orchestration service
 │   │   ├── travel_search.py      # Travel search + filtering
-│   │   └── geocoding.py          # Dynamic location resolution
+│   │   ├── geocoding.py          # Dynamic location resolution
+│   │   ├── journey_planner.py    # Builds a complete multi-leg journey plan 
+│   │   ├── meeting_planner.py    # Meeting Planner Service.
+│   │   ├── permission_service.py # Permission Service.
+│   │   └── trip_gatherer.py      
 │   ├── api_clients/
 │   │   ├── flights.py            # Amadeus flights client
 │   │   └── travel.py             # Hotels, trains, buses, cars clients
