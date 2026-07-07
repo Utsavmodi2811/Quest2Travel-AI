@@ -47,6 +47,11 @@ class ChatService:
             user_id=request.user_id,
             company_id=request.company_id,
         )
+        meeting_in_progress = (
+            context.meeting
+            and context.meeting.gathering_state
+            and not context.meeting.gathering_complete
+        )
         print("=" * 50)
         print("NEW MESSAGE:", request.message)
         print("Meeting:", context.meeting)
@@ -68,7 +73,18 @@ class ChatService:
 
         # ── 3. Profile gathering (ask city once if missing) ───────────────────
         profile_question = memory.needs_profile_info(context)
-        if profile_question and not is_travel_query(request.message):
+
+        meeting_in_progress = (
+            context.meeting
+            and context.meeting.gathering_state
+            and not context.meeting.gathering_complete
+        )
+
+        if (
+            not meeting_in_progress
+            and profile_question
+            and not is_travel_query(request.message)
+        ):
             assistant_msg = await memory.add_message(
                 role=MessageRole.ASSISTANT,
                 content=profile_question,
@@ -84,7 +100,8 @@ class ChatService:
         # User has just completed their profile.
         # Don't continue into travel search.
         if (
-            context.profile_complete
+            not meeting_in_progress
+            and context.profile_complete
             and request.message.strip().lower() == context.home_city.lower()
         ):
             assistant_msg = await memory.add_message(
@@ -106,7 +123,11 @@ class ChatService:
                 ],
             )
 
-        if context.home_city and not context.profile_complete:
+        if (
+            not meeting_in_progress
+            and context.home_city
+            and not context.profile_complete
+        ):
             context.profile_complete = True
 
             session = await memory.get_or_create_session()
