@@ -28,7 +28,8 @@ from typing import List, Optional
 
 from config.settings import settings
 from database.connection import get_db
-
+from services.permission_service import permission_service
+from models.travel import ServiceType
 from models.travel import (
     TravelContext,
     TravelMode,
@@ -83,6 +84,24 @@ class TravelSearchService:
 
         mode = context.mode
 
+        service_map = {
+            TravelMode.FLIGHT: ServiceType.FLIGHT,
+            TravelMode.HOTEL: ServiceType.HOTEL,
+            TravelMode.TRAIN: ServiceType.TRAIN,
+            TravelMode.BUS: ServiceType.BUS,
+            TravelMode.CAR: ServiceType.CAR,
+        }
+
+        if mode in service_map:
+
+            allowed, message = await permission_service.is_allowed(
+                context.company_id,
+                service_map[mode],
+            )
+
+            if not allowed:
+                raise PermissionError(message)
+
         if mode == TravelMode.FLIGHT:
             return await self._flights(session_id, context)
 
@@ -121,53 +140,97 @@ class TravelSearchService:
             ctx.travel_date
             or datetime.now().strftime("%Y-%m-%d")
         )
+        allowed_services = await permission_service.get_allowed_services(
+            ctx.company_id
+        )
 
         cabin = (
             ctx.cabin_class.value
             if ctx.cabin_class
             else "economy"
         )
+        tasks = []
 
-        tasks = [
+        task_order = []
 
-            flights_client.search(
-                ctx.origin or "",
-                ctx.destination or "",
-                travel_date,
-                cabin_class=cabin,
-                passengers=ctx.passengers,
-            ),
+        if ServiceType.FLIGHT in allowed_services:
 
-            trains_client.search(
-                ctx.origin or "",
-                ctx.destination or "",
-                travel_date,
-            ),
+            tasks.append(
 
-            buses_client.search(
-                ctx.origin or "",
-                ctx.destination or "",
-                travel_date,
-            ),
+                flights_client.search(
+                    ctx.origin or "",
+                    ctx.destination or "",
+                    travel_date,
+                    cabin_class=cabin,
+                    passengers=ctx.passengers,
+                )
 
-        ]
+            )
 
-        flights, trains, buses = await asyncio.gather(
+            task_order.append(ServiceType.FLIGHT)
+
+        if ServiceType.TRAIN in allowed_services:
+
+            tasks.append(
+
+                trains_client.search(
+                    ctx.origin or "",
+                    ctx.destination or "",
+                    travel_date,
+                )
+
+            )
+
+            task_order.append(ServiceType.TRAIN)
+
+        if ServiceType.BUS in allowed_services:
+
+            tasks.append(
+
+                buses_client.search(
+                    ctx.origin or "",
+                    ctx.destination or "",
+                    travel_date,
+                )
+
+            )
+
+            task_order.append(ServiceType.BUS)
+        if not tasks:
+            logger.warning(
+                "No services are enabled for company %s",
+                ctx.company_id,
+            )
+
+            return TravelSearchResult(
+                session_id=session_id,
+                search_type=TravelMode.GENERAL,
+                origin=ctx.origin,
+                destination=ctx.destination,
+                travel_date=travel_date,
+            )
+        results = await asyncio.gather(
             *tasks,
             return_exceptions=True,
         )
 
-        if isinstance(flights, Exception):
-            logger.exception(flights)
-            flights = []
+        flights = []
+        trains = []
+        buses = []
+        for service, result in zip(task_order, results):
 
-        if isinstance(trains, Exception):
-            logger.exception(trains)
-            trains = []
+            if isinstance(result, Exception):
+                logger.exception(result)
+                continue
 
-        if isinstance(buses, Exception):
-            logger.exception(buses)
-            buses = []
+            if service == ServiceType.FLIGHT:
+                flights = result
+
+            elif service == ServiceType.TRAIN:
+                trains = result
+
+            elif service == ServiceType.BUS:
+                buses = result
 
         flights = self._filter_flights(
             flights or [],

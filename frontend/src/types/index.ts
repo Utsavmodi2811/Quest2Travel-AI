@@ -11,7 +11,11 @@ export type TravelMode =
   | 'general';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
-
+export interface Company {
+  company_id: string;
+  name: string;
+  allowed_services: string[];
+}
 export type CabinClass =
   | 'economy'
   | 'premium_economy'
@@ -450,4 +454,10 @@ export interface UIMessage extends Message {
 
   permission_denied?: boolean;
   denied_service?: string;
+}
+
+export interface Company {
+  company_id: string;
+  name: string;
+  allowed_services: string[];
 }

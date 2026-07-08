@@ -134,6 +134,8 @@ class MeetingPlannerService:
             return flights
 
         filtered = []
+        print("=" * 60)
+        print("ARRIVE BEFORE :", must_arrive_by)
         for f in flights:
             try:
                 last_seg = f.segments[-1]
@@ -143,6 +145,11 @@ class MeetingPlannerService:
                     arr_str = arr_str.split("T")[1]
                 arr_h, arr_m = map(int, arr_str[:5].split(":"))
                 arr_minutes = arr_h * 60 + arr_m
+                print(
+                    f"{last_seg.airline} {last_seg.flight_number} "
+                    f"Arrival={arr_str} "
+                    f"Limit={must_arrive_by}"
+                )
                 if arr_minutes <= limit_minutes:
                     filtered.append(f)
             except Exception:
@@ -152,6 +159,14 @@ class MeetingPlannerService:
             f"Time filter (arrive by {must_arrive_by}): "
             f"{len(filtered)}/{len(flights)} flights pass"
         )
+        print("\nFlight Filter")
+
+        for f in flights:
+            arr = f.segments[-1].arrival_time
+            print(arr)
+
+        print("Allowed until:", must_arrive_by)
+        print("Remaining:", len(filtered))
         return filtered
 
     def filter_flights_by_departure(
@@ -181,6 +196,36 @@ class MeetingPlannerService:
             except Exception:
                 filtered.append(f)
         return filtered
+
+    def filter_trains_by_arrival(
+        self,
+        trains: list,
+        must_arrive_by: str,
+    ):
+        if not trains or not must_arrive_by:
+            return trains
+
+        limit_h, limit_m = map(int, must_arrive_by.split(":"))
+        limit = limit_h * 60 + limit_m
+
+        valid = []
+
+        for t in trains:
+
+            try:
+                arr = t.arrival_time.replace("+1", "")
+
+                hh, mm = map(int, arr.split(":"))
+
+                minutes = hh * 60 + mm
+
+                if minutes <= limit:
+                    valid.append(t)
+
+            except Exception:
+                valid.append(t)
+
+        return valid
 
 
 meeting_planner = MeetingPlannerService()

@@ -20,7 +20,7 @@ from models.travel import (
 )
 from services.meeting_planner import meeting_planner
 from services.permission_service import permission_service
-
+from utils.time_filter import filter_flights_for_meeting
 logger = logging.getLogger(__name__)
 
 # Map string mode names → TravelMode enum
@@ -45,7 +45,11 @@ class JourneyPlannerService:
         journey = JourneyPlan(session_id=session_id, meeting=meeting)
 
         # Prevent None errors
-        allowed = context.allowed_services or []
+        allowed = set(
+            await permission_service.get_allowed_services(
+                context.company_id
+            )
+        )
 
         # Validate required fields
         required = {
@@ -95,8 +99,6 @@ class JourneyPlannerService:
                 travel_search_fn,
             )
 
-            if hotel_leg:
-                journey.legs.append(hotel_leg)
 
             if hotel_leg:
                 journey.legs.append(hotel_leg)
@@ -154,8 +156,9 @@ class JourneyPlannerService:
             # Fall back to first allowed transport mode
             for fallback_svc, fallback_mode in [
                 (ServiceType.FLIGHT, TravelMode.FLIGHT),
-                (ServiceType.TRAIN,  TravelMode.TRAIN),
-                (ServiceType.BUS,    TravelMode.BUS),
+                (ServiceType.TRAIN, TravelMode.TRAIN),
+                (ServiceType.BUS, TravelMode.BUS),
+                (ServiceType.CAR, TravelMode.CAR),
             ]:
                 if fallback_svc in allowed:
                     travel_mode = fallback_mode
@@ -193,7 +196,15 @@ class JourneyPlannerService:
 
         elif travel_mode == TravelMode.TRAIN:
             items = result.trains or []
+
+            if window.get("flight_arrival_by"):
+                items = meeting_planner.filter_trains_by_arrival(
+                    items,
+                    window["flight_arrival_by"],
+                )
+
             if not items:
+                logger.warning("No train can reach before the meeting.")
                 return None
             best     = min(items, key=lambda t: min((c.price for c in t.classes if c.price), default=999999))
             best_cls = min(best.classes, key=lambda c: c.price)

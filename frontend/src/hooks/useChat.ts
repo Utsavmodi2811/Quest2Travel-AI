@@ -6,10 +6,11 @@ import { useChatStore } from '@/store/chat';
 import { UIMessage } from '@/types';
 import { tempId } from '@/lib/utils'; // Moved from inline helper
 import toast from 'react-hot-toast';
-
+import { useAuthStore } from "@/store/auth";
 export function useChat() {
   const {
     sessionId,
+    companyId,
     messages,
     isLoading,
     suggestions,
@@ -54,9 +55,14 @@ export function useChat() {
 
       try {
         console.log("SENDING MESSAGE:", text);
+        const auth = useAuthStore.getState();
+
         const response = await chatApi.sendMessage({
           session_id: sessionId || undefined,
           message: text,
+
+          user_id: auth.user?.user_id,
+          company_id: auth.user?.company_id,
         });
         console.log("BACKEND RESPONSE");
         console.log(response.suggestions);

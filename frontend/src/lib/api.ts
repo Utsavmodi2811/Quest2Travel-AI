@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { ChatRequest, ChatResponse, SessionSummary } from '@/types';
+import { Company } from '@/types';
 
 // Uses Next.js rewrite proxy → eliminates CORS entirely
 const api = axios.create({
@@ -7,7 +8,21 @@ const api = axios.create({
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 });
+api.interceptors.request.use((config) => {
 
+  if (typeof window !== "undefined") {
+
+    const token = localStorage.getItem("token");
+
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+
+  }
+
+  return config;
+
+});
 api.interceptors.response.use(
   (res) => res,
   (err) => {
@@ -54,7 +69,7 @@ export const sessionsApi = {
 
 // Added from new version
 export const companyApi = {
-  list: () =>
+  list: (): Promise<Company[]> =>
     api.get('/api/company').then((r) => r.data),
 
   create: (data: object) =>
@@ -83,4 +98,27 @@ export const travelApi = {
     api.post('/api/travel/filter', data).then((r) => r.data),
 };
 
+export const authApi = {
+  login: (data: {
+    email: string;
+    password: string;
+  }) =>
+    api.post("/api/auth/login", data).then((r) => r.data),
+
+  register: (data: {
+    employee_id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    password: string;
+    company_id: string;
+    phone?: string;
+    department?: string;
+    designation?: string;
+  }) =>
+    api.post("/api/auth/register", data).then((r) => r.data),
+
+  me: () =>
+    api.get("/api/auth/me").then((r) => r.data),
+};
 export default api;

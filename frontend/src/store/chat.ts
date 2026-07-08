@@ -5,6 +5,9 @@ interface ChatState {
   sessionId: string | null;
   messages: UIMessage[];
   travelContext: TravelContext | null;
+  companyId: string;
+  companies: any[];
+  allowedServices: string[];
   isLoading: boolean;
   suggestions: string[];
   sessions: SessionSummary[];
@@ -16,6 +19,9 @@ interface ChatState {
   addMessage: (msg: UIMessage) => void;
   updateMessage: (id: string, updates: Partial<UIMessage>) => void;
   setMessages: (msgs: UIMessage[]) => void;
+  setCompanyId: (id: string) => void;
+  setCompanies: (companies: any[]) => void;
+  setAllowedServices: (services: string[]) => void;
   setTravelContext: (ctx: TravelContext | null) => void;
   setLoading: (v: boolean) => void;
   setSuggestions: (s: string[]) => void;
@@ -30,6 +36,11 @@ export const useChatStore = create<ChatState>((set) => ({
   sessionId: null,
   messages: [],
   travelContext: null,
+  companyId: "guest-000",
+
+  companies: [],
+
+  allowedServices: [],
   isLoading: false,
   suggestions: [],
   sessions: [],
@@ -54,6 +65,20 @@ export const useChatStore = create<ChatState>((set) => ({
   setMessages: (msgs) => set({ messages: msgs }),
 
   setTravelContext: (ctx) => set({ travelContext: ctx }),
+  setCompanyId: (id) =>
+      set({
+          companyId: id,
+      }),
+
+  setCompanies: (companies) =>
+      set({
+          companies,
+      }),
+
+  setAllowedServices: (services) =>
+      set({
+          allowedServices: services,
+      }),
 
   setLoading: (v) => set({ isLoading: v }),
 

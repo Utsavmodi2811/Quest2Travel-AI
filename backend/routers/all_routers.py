@@ -5,7 +5,7 @@ All FastAPI routers.
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 import logging
-
+from routers.auth import auth_router
 from models.travel import ChatRequest, ChatResponse, FilterRequest, Company, ServiceType
 from services.chat import chat_service
 from services.permission_service import permission_service
@@ -160,8 +160,73 @@ async def update_services(company_id: str, services: List[str]):
 
 
 @company_router.get("/{company_id}")
+@company_router.post("/seed")
+async def seed_companies():
+
+    companies = [
+
+        Company(
+            company_id="guest-000",
+            name="Guest",
+            allowed_services=list(ServiceType),
+        ),
+
+        Company(
+            company_id="adani-001",
+            name="Adani Group",
+            allowed_services=[
+                ServiceType.FLIGHT,
+                ServiceType.HOTEL,
+            ],
+        ),
+
+        Company(
+            company_id="iocl-001",
+            name="Indian Oil Corporation",
+            allowed_services=[
+                ServiceType.FLIGHT,
+            ],
+        ),
+
+        Company(
+            company_id="reliance-001",
+            name="Reliance Industries",
+            allowed_services=list(ServiceType),
+        ),
+
+        Company(
+            company_id="tcs-001",
+            name="TCS",
+            allowed_services=[
+                ServiceType.FLIGHT,
+                ServiceType.HOTEL,
+                ServiceType.CAR,
+            ],
+        ),
+
+        Company(
+            company_id="infosys-001",
+            name="Infosys",
+            allowed_services=list(ServiceType),
+        ),
+    ]
+
+    for company in companies:
+        await permission_service.upsert_company(company)
+
+    return {
+        "message": "Companies seeded successfully."
+    }
 async def get_company(company_id: str):
     company = await permission_service.get_company(company_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
     return company.dict()
+
+__all__ = [
+    "auth_router",
+    "chat_router",
+    "sessions_router",
+    "travel_router",
+    "company_router",
+]

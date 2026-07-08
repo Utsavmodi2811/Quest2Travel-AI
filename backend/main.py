@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from config.settings import settings
 from database.connection import connect_db, disconnect_db
 from routers.all_routers import (
+    auth_router,
     chat_router,
     sessions_router,
     travel_router,
@@ -125,6 +126,7 @@ async def global_exception_handler(
 # Routers
 # =====================================================================
 
+app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(sessions_router)
 app.include_router(travel_router)

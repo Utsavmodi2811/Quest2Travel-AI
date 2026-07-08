@@ -65,37 +65,26 @@ class User(BaseModel):
     user_id: str = Field(
         default_factory=lambda: f"USR-{uuid4().hex[:8].upper()}"
     )
-
     employee_id: str
-
     first_name: str
-
     last_name: str
-
     email: EmailStr
-
+    password_hash: str
+    last_login: Optional[datetime] = None
+    email_verified: bool = False
     phone: Optional[str] = None
-
     company_id: str
-
     department: Optional[str] = None
-
     designation: Optional[str] = None
-
     role: UserRole = UserRole.EMPLOYEE
-
     status: UserStatus = UserStatus.ACTIVE
-
     preferences: UserPreferences = Field(
         default_factory=UserPreferences
     )
-
     active: bool = True
-
     created_at: datetime = Field(
         default_factory=datetime.utcnow
     )
-
     updated_at: datetime = Field(
         default_factory=datetime.utcnow
     )

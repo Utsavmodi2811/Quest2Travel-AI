@@ -5,7 +5,10 @@ Chat Router — /api/chat
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List
 import logging
+from fastapi import Depends
 
+from security.dependencies import get_current_user
+from models.user import User
 from models.travel import ChatRequest, ChatResponse, Message
 from services.chat import chat_service
 from memory.conversation import ConversationMemory
@@ -16,17 +19,35 @@ router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
 
 @router.post("", response_model=ChatResponse)
-async def send_message(request: ChatRequest):
+async def send_message(
+    request: ChatRequest,
+    current_user: User = Depends(get_current_user),
+):
     """
-    Send a user message and receive an AI response with optional travel results.
-    Creates a new session if session_id is not provided.
+    Send a user message and receive an AI response.
     """
+
     try:
+
+        # Inject authenticated user information
+        request.user_id = current_user.user_id
+        request.company_id = current_user.company_id
+
         response = await chat_service.process(request)
+
         return response
+
     except Exception as e:
-        logger.error(f"Chat processing error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to process message")
+
+        logger.error(
+            f"Chat processing error: {e}",
+            exc_info=True,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to process message",
+        )
 
 
 @router.get("/{session_id}/history", response_model=List[dict])

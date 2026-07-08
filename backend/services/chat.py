@@ -389,6 +389,17 @@ class ChatService:
                             travel_results = await travel_search_service.search(
                                 session_id, context
                             )
+                            window = meeting_planner.compute_travel_window(meeting)
+
+                            if (
+                                context.mode == TravelMode.FLIGHT
+                                and travel_results.flights
+                                and window.get("flight_arrival_by")
+                            ):
+                                travel_results.flights = meeting_planner.filter_flights_by_arrival(
+                                    travel_results.flights,
+                                    window["flight_arrival_by"],
+                                )
                         except Exception as e:
                             import traceback
                             traceback.print_exc()

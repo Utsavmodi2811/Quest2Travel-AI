@@ -45,19 +45,33 @@ DEFAULT_COMPANIES = {
 class PermissionService:
 
     async def get_company(self, company_id: str) -> Optional[Company]:
-        """Load company from MongoDB, fall back to defaults for demo."""
-        try:
-            db = get_db()
-            doc = await db.companies.find_one({"company_id": company_id})
-            if doc:
-                doc.pop("_id", None)
-                return Company(**doc)
-        except Exception as e:
-            logger.debug(f"Company DB lookup failed: {e}")
+        """
+        Load company from MongoDB.
+        Returns None if company does not exist.
+        """
 
-        # Demo fallback
-        key = company_id.upper().split("-")[0]
-        return DEFAULT_COMPANIES.get(key, DEFAULT_COMPANIES["GUEST"])
+        try:
+
+            db = get_db()
+
+            doc = await db.companies.find_one(
+                {
+                    "company_id": company_id
+                }
+            )
+
+            if not doc:
+                return None
+
+            doc.pop("_id", None)
+
+            return Company(**doc)
+
+        except Exception as e:
+
+            logger.exception(f"Error loading company: {e}")
+
+            return None
 
     async def is_allowed(
         self,
@@ -68,12 +82,17 @@ class PermissionService:
         Returns (allowed, denial_message).
         If company_id is None or "GUEST", all services are allowed.
         """
-        if not company_id or company_id.upper() in ("GUEST", "GUEST-000"):
-            return True, None
+        if not company_id:
+            company_id = "guest-000"
 
         company = await self.get_company(company_id)
-        if not company:
-            return True, None  # unknown company → allow
+
+        if company is None:
+
+            return (
+                False,
+                "Company not found."
+            )
 
         if service in company.allowed_services:
             return True, None

@@ -1,5 +1,5 @@
 'use client';
-
+import { LogOut } from "lucide-react";
 import { useEffect, useRef } from 'react';
 import { Menu, Moon, Sun, PlaneTakeoff, Plus } from 'lucide-react';
 import { useChatStore } from '@/store/chat';
@@ -7,7 +7,8 @@ import { useChat } from '@/hooks/useChat';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ChatMessage } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
-
+import { useRouter } from "next/navigation";
+import { useAuthStore } from "@/store/auth";
 const QUICK_PROMPTS = [
   '✈️ Delhi to Mumbai flights tomorrow',
   '🏨 5-star hotels in Goa under ₹8,000',
@@ -16,6 +17,15 @@ const QUICK_PROMPTS = [
 ];
 
 export default function ChatPage() {
+  const router = useRouter();
+
+  const {
+    loadUser,
+    isAuthenticated,
+    initialized,
+    logout,
+    user,
+  } = useAuthStore();
   const { sidebarOpen, darkMode, setSidebarOpen, toggleDarkMode, startNewChat } =
     useChatStore();
   const { messages, isLoading, sendMessage, sessionId } = useChat();
@@ -30,7 +40,25 @@ export default function ChatPage() {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
   }, [darkMode]);
+  useEffect(() => {
+    loadUser();
+  }, [loadUser]);
+  useEffect(() => {
 
+    if (!initialized) return;
+
+    if (!isAuthenticated) {
+      router.replace("/login");
+    }
+
+  }, [initialized, isAuthenticated, router]);
+  if (!initialized) {
+    return null;
+  }
+
+  if (!isAuthenticated) {
+    return null;
+  }
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-950">
 
@@ -40,7 +68,7 @@ export default function ChatPage() {
       {/* Main */}
       <main className="flex-1 flex flex-col min-w-0 h-full">
 
-        {/* ── Header ─────────────────────────────────────────────────────── */}
+        {/* ── Header ─3────────────────────────────────────────────────────── */}
         <header className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex-shrink-0 shadow-sm">
           <div className="flex items-center gap-3">
             <button
@@ -66,6 +94,15 @@ export default function ChatPage() {
                 {sessionId.slice(0, 8)}…
               </span>
             )}
+            <div className="hidden md:block text-right">
+              <p className="font-medium text-sm">
+                {user?.first_name} {user?.last_name}
+              </p>
+
+              <p className="text-xs text-gray-500">
+                {user?.company_id}
+              </p>
+            </div>
             <button
               onClick={startNewChat}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-400 transition-colors"
@@ -79,6 +116,16 @@ export default function ChatPage() {
               title="Toggle dark mode"
             >
               {darkMode ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+            <button
+              onClick={() => {
+                logout();
+                router.replace("/login");
+              }}
+              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+              title="Logout"
+            >
+              <LogOut size={16} />
             </button>
           </div>
         </header>
