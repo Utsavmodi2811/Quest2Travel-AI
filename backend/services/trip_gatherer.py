@@ -152,25 +152,68 @@ class TripGatherer:
         Parse the user's latest message and fill in any newly provided info.
         Also copies over anything already known from TravelContext.
         """
+        print("=" * 60)
+        print("MESSAGE:", message)
+        print("CONTEXT DESTINATION:", context.destination)
+        print("MEETING CITY:", context.meeting.meeting_city if context.meeting else None)
+        print("TRAVEL DATE:", context.travel_date)
+        print("=" * 60)
         msg = message.strip().lower()
-        question = self.next_question(state)
 
-        city, conf = resolve_city(message.strip())
+        city, conf = resolve_city(message)
 
         if conf >= 0.9:
-            if "origin" in question.lower() or "currently in" in question.lower():
+
+            if any(
+                x in msg
+                for x in [
+                    "i'm in",
+                    "i am in",
+                    "currently in",
+                    "travelling from",
+                    "traveling from",
+                    "from "
+                ]
+            ):
                 state.origin = city
 
-            elif "destination" in question.lower() or "meeting" in question.lower():
-                state.destination = city
+            elif (
+                state.origin is None
+                and state.destination is not None
+                and len(message.strip().split()) <= 2
+                and city != state.destination
+            ):
+                print("SETTING ORIGIN FROM CITY CHIP:", city)
+                state.origin = city
+
         # Sync from context (NLU already parsed routes, dates, etc.)
         if context.origin and not state.origin:
             state.origin = context.origin
-        if context.origin:
-            state.origin = context.origin
+
+
+
+        # Meeting parser already found destination
+        if (
+            context.meeting
+            and context.meeting.meeting_city
+            and not state.destination
+        ):
+            print("SETTING DESTINATION FROM MEETING =", context.meeting.meeting_city)
+            state.destination = context.meeting.meeting_city
 
         if context.destination:
             state.destination = context.destination
+        # Sync from context (NLU already parsed routes, dates, etc.)
+        # If meeting parser already found the meeting city,
+        # use it as the destination.
+
+        print("=" * 80)
+        print("AFTER SYNC")
+        print("state.origin      =", state.origin)
+        print("state.destination =", state.destination)
+        print("context.origin    =", context.origin)
+        print("context.destination =", context.destination)
+        print("=" * 80)
 
         if context.travel_date:
             state.travel_date = context.travel_date
@@ -202,8 +245,8 @@ class TripGatherer:
             and not state.destination
         ):
             state.destination = context.meeting.meeting_city
-        if context.home_city and not state.origin:
-            state.origin = context.home_city
+        # if context.home_city and not state.origin:
+        #     state.origin = context.home_city
         if context.max_budget and not state.budget_max:
             state.budget_max = context.max_budget
         if context.passengers and context.passengers > 1:

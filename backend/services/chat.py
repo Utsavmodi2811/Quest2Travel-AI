@@ -238,9 +238,20 @@ class ChatService:
             # Load or create GatheringState from persisted dict
             gs_dict = meeting.gathering_state or {}
             state   = GatheringState.from_dict(gs_dict) if gs_dict else GatheringState()
-
+            print("=" * 60)
+            print("BEFORE update_from_message")
+            print("Origin      :", state.origin)
+            print("Destination :", state.destination)
+            print("Home city   :", context.home_city)
+            print("Ctx origin  :", context.origin)
+            print("Meeting city:", context.meeting.meeting_city if context.meeting else None)
             # Update state with what NLU / context already knows
             state = _gatherer.update_from_message(state, request.message, context)
+            print("=" * 60)
+            print("AFTER update_from_message")
+            print("Origin      :", state.origin)
+            print("Destination :", state.destination)
+            print("=" * 60)
             print("=" * 80)
             print("STATE AFTER UPDATE")
             print("Origin      :", state.origin)
@@ -260,7 +271,8 @@ class ChatService:
                 context.travel_date = state.travel_date
             context.mode = state.outbound_mode or context.mode
             context.travel_date = state.travel_date
-            meeting.meeting_city = state.destination
+            if not meeting.meeting_city and state.destination:
+                meeting.meeting_city = state.destination
             meeting.current_city = state.origin
 
             if state.travel_date:
@@ -286,7 +298,10 @@ class ChatService:
             # Check if gathering is complete
             print("CHECKING COMPLETENESS")
             if not state.is_complete():
-
+                print("=" * 80)
+                print("BEFORE next_question")
+                print(state.to_dict())
+                print("=" * 80)
                 # Ask the next question
                 question = _gatherer.next_question(state)
 

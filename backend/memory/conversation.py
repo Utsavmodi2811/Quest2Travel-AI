@@ -121,7 +121,22 @@ class ConversationMemory:
 
         # ── Meeting extraction (Feature 1) ─────────────────────────────────────
         meeting_info = extract_meeting_info(user_message)
-
+        print("=" * 50)
+        print("AFTER extract_meeting_info")
+        print(meeting_info)
+        print("=" * 50)
+        print("=" * 50)
+        print("MEETING CITY:", meeting_info.meeting_city if meeting_info else None)
+        print("DESTINATION :", ctx.destination)
+        print("=" * 50)
+        print("=" * 60)
+        print("MEETING INFO")
+        print(meeting_info)
+        if meeting_info:
+            print("meeting_city :", meeting_info.meeting_city)
+            print("meeting_date :", meeting_info.meeting_date)
+            print("meeting_time :", meeting_info.meeting_time)
+        print("=" * 60)
         if meeting_info:
             if ctx.meeting:
                 meeting_info = self._merge_meeting(ctx.meeting, meeting_info)
@@ -182,15 +197,13 @@ class ConversationMemory:
             ctx.destination, _ = resolve_city(new_dest)
 
         elif dest_only:
+
             city, _ = resolve_city(dest_only)
-            if ctx.destination and ctx.destination != city:
-                # Destination changed — clear route-specific fields
-                ctx.origin = None
-                ctx.cabin_class = None
-                ctx.non_stop_only = False
-            elif ctx.origin:
-                ctx.origin = None  # clear stale origin for dest-only search
-            ctx.destination = city
+
+            # Only update destination.
+            # Preserve the origin.
+            if not ctx.destination or ctx.destination != city:
+                ctx.destination = city
 
         # ── Profile fields (collected once, Feature 8) ─────────────────────────
         # Home city: extract from "I am in Delhi" / "I am currently in Pune"
@@ -302,6 +315,28 @@ class ConversationMemory:
             print("MEETING CITY :", ctx.meeting.meeting_city)
 
         print("=" * 50)
+        print("=" * 50)
+        print("FINAL CONTEXT")
+        print("home_city    :", ctx.home_city)
+        print("origin       :", ctx.origin)
+        print("destination  :", ctx.destination)
+
+        if ctx.meeting:
+            print("meeting city :", ctx.meeting.meeting_city)
+
+        print("=" * 50)
+        print("=" * 80)
+        print("AFTER update_context_from_message")
+        print("HOME CITY :", ctx.home_city)
+        print("ORIGIN    :", ctx.origin)
+        print("DEST      :", ctx.destination)
+
+        if ctx.meeting:
+            print("MEETING CITY :", ctx.meeting.meeting_city)
+            print("MEETING TIME :", ctx.meeting.meeting_time)
+            print("MEETING DATE :", ctx.meeting.meeting_date)
+
+        print("=" * 80)
         return ctx
 
     async def get_context(self) -> TravelContext:

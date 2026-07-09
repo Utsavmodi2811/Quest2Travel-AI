@@ -507,9 +507,17 @@ def extract_destination_only(text: str) -> Optional[str]:
 
     patterns = [
 
+        # Hotels
         r"(?:hotel|hotels|stay|accommodation|hostel|room|rooms|resort)\s+(?:in|at|near)\s+([A-Za-z][A-Za-z\s]{1,30})",
 
+        # Cars
         r"(?:car|cars|cab|taxi|rental)\s+(?:in|at|near)\s+([A-Za-z][A-Za-z\s]{1,30})",
+
+        # Meetings
+        r"(?:meeting|conference|appointment|event)\s+(?:in|at)\s+([A-Za-z][A-Za-z\s]{1,30})",
+
+        # Generic
+        r"\bin\s+([A-Za-z][A-Za-z\s]{1,30})",
     ]
 
     for pattern in patterns:
@@ -746,7 +754,10 @@ def extract_time(text: str) -> Optional[str]:
 
     if not match:
         return None
+    matched_text = match.group(0)
 
+    if ":" not in matched_text and match.group(3) is None:
+        return None
     hour = int(match.group(1))
     minute = int(match.group(2) or 0)
     ampm = (match.group(3) or "").lower()
@@ -849,7 +860,10 @@ def extract_meeting_info(text: str) -> Optional[MeetingInfo]:
     # ----------------------------------------------------
 
     meeting.meeting_time = extract_time(text)
-
+    print("=" * 60)
+    print("TEXT:", text)
+    print("EXTRACTED TIME:", meeting.meeting_time)
+    print("=" * 60)
     # ----------------------------------------------------
     # Meeting Date
     # ----------------------------------------------------
@@ -873,10 +887,12 @@ def extract_meeting_info(text: str) -> Optional[MeetingInfo]:
     )
 
     if location_match:
+        meeting.meeting_location = location_match.group(1).strip()
 
-        meeting.meeting_location = (
-            location_match.group(1).strip()
-        )
+        city, confidence = resolve_city(meeting.meeting_location)
+
+        if confidence >= 0.6:
+            meeting.meeting_city = city
 
     # ----------------------------------------------------
     # Meeting City
@@ -944,7 +960,12 @@ def extract_meeting_info(text: str) -> Optional[MeetingInfo]:
         ]
     ):
         meeting.return_required = True
-
+    print("=" * 50)
+    print("MEETING INFO")
+    print("meeting_city :", meeting.meeting_city)
+    print("meeting_date :", meeting.meeting_date)
+    print("meeting_time :", meeting.meeting_time)
+    print("=" * 50)
     return meeting
 
 # ============================================================================
