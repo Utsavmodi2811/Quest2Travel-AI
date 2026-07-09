@@ -730,45 +730,36 @@ def extract_date(text: str) -> Optional[str]:
 # ============================================================================
 
 def extract_time(text: str) -> Optional[str]:
-    """
-    Extract time from natural language.
-
-    Examples:
-        10 AM
-        10:30 AM
-        14:45
-        7 pm
-
-    Returns:
-        HH:MM (24-hour format)
-    """
 
     if not text:
         return None
 
-    match = re.search(
+    matches = re.finditer(
         r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b",
         text,
         re.IGNORECASE,
     )
 
-    if not match:
-        return None
-    matched_text = match.group(0)
+    for match in matches:
 
-    if ":" not in matched_text and match.group(3) is None:
-        return None
-    hour = int(match.group(1))
-    minute = int(match.group(2) or 0)
-    ampm = (match.group(3) or "").lower()
+        matched_text = match.group(0)
 
-    if ampm == "pm" and hour != 12:
-        hour += 12
+        # Skip dates like 11 July
+        if ":" not in matched_text and match.group(3) is None:
+            continue
 
-    elif ampm == "am" and hour == 12:
-        hour = 0
+        hour = int(match.group(1))
+        minute = int(match.group(2) or 0)
+        ampm = (match.group(3) or "").lower()
 
-    return f"{hour:02d}:{minute:02d}"
+        if ampm == "pm" and hour != 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+
+        return f"{hour:02d}:{minute:02d}"
+
+    return None
 
 
 # ============================================================================
