@@ -157,9 +157,9 @@ class ConversationMemory:
                 meeting_info.current_city = ctx.origin
             ctx.meeting = meeting_info
             # Set route from meeting info
-            if meeting_info.current_city:
+            if meeting_info.current_city and not ctx.origin:
                 ctx.origin, _ = resolve_city(meeting_info.current_city)
-            if meeting_info.meeting_city:
+            if meeting_info.meeting_city and not ctx.destination:
                 ctx.destination, _ = resolve_city(meeting_info.meeting_city)
         print("=" * 60)
         print("USER MESSAGE:", user_message)

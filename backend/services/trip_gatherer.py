@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from utils.nlu import(extract_hotel_stars,resolve_city,)
 from models.travel import MeetingInfo, TravelContext, TravelMode
-
+from utils.nlu import extract_time
 logger = logging.getLogger(__name__)
 
 
@@ -159,11 +159,15 @@ class TripGatherer:
         print("TRAVEL DATE:", context.travel_date)
         print("=" * 60)
         msg = message.strip().lower()
-
+        print("CONTEXT ORIGIN      :", context.origin)
+        print("CONTEXT DESTINATION :", context.destination)
+        print("STATE ORIGIN        :", state.origin)
+        print("STATE DESTINATION   :", state.destination)
         city, conf = resolve_city(message)
 
         if conf >= 0.9:
 
+            # User explicitly tells us where they are
             if any(
                 x in msg
                 for x in [
@@ -177,17 +181,20 @@ class TripGatherer:
             ):
                 state.origin = city
 
+            # Only if the bot is currently asking for origin
             elif (
                 state.origin is None
                 and state.destination is not None
                 and len(message.strip().split()) <= 2
-                and city != state.destination
             ):
-                print("SETTING ORIGIN FROM CITY CHIP:", city)
                 state.origin = city
 
         # Sync from context (NLU already parsed routes, dates, etc.)
-        if context.origin and not state.origin:
+        if (
+            context.origin
+            and not state.origin
+            and context.origin != context.destination
+        ):
             state.origin = context.origin
 
 
@@ -203,6 +210,14 @@ class TripGatherer:
 
         if context.destination:
             state.destination = context.destination
+        # If we already know the destination from the meeting,
+        # don't treat it as the origin.
+        if (
+            state.origin == state.destination
+            and context.meeting
+            and context.meeting.current_city is None
+        ):
+            state.origin = None
         # Sync from context (NLU already parsed routes, dates, etc.)
         # If meeting parser already found the meeting city,
         # use it as the destination.
@@ -227,17 +242,21 @@ class TripGatherer:
         # ----------------------------
         # Parse meeting time from reply
         # ----------------------------
-        if not state.meeting_time:
+        print("="*60)
+        print("RAW MESSAGE:", message)
 
-            from utils.nlu import extract_time
+        meeting_time = extract_time(message)
 
-            meeting_time = extract_time(message)
+        print("PARSED TIME:", meeting_time)
+        print("="*60)
 
-            if meeting_time:
-                state.meeting_time = meeting_time
+        if meeting_time:
+            state.meeting_time = meeting_time
 
-                if context.meeting:
-                    context.meeting.meeting_time = meeting_time
+            if context.meeting:
+                context.meeting.meeting_time = meeting_time
+
+        print("STATE TIME:", state.meeting_time)
         # Sync destination from meeting
         if (
             context.meeting
@@ -448,7 +467,12 @@ class TripGatherer:
                                     "that's all", "thats all", "nothing else",
                                     "no other", "start planning", "book it"]):
             state.asked_preferences = True
-
+        print("=" * 60)
+        print("FINAL STATE")
+        print("Origin      :", state.origin)
+        print("Destination :", state.destination)
+        print("Meeting Time:", state.meeting_time)
+        print("=" * 60)
         return state
     def should_ask_hotel(self, state: GatheringState) -> bool:
         """
@@ -479,22 +503,24 @@ class TripGatherer:
         Questions are asked in priority order — only one at a time.
         """
         # Origin (should already be set from NLU/profile, but ask if missing)
-        if not state.origin:
-            return "Which city are you currently in / travelling from?"
-
         # Destination
         if not state.destination:
             return "What is your destination city for this business trip?"
 
-        # Outbound date
+        # Date
         if not state.travel_date:
-            return "What date is your outbound journey? *(e.g. tomorrow, 20th June)*"
+            return "What date is your outbound journey?"
+
         # Meeting time
         if not state.meeting_time:
             return (
                 "What time is your meeting? "
-                "(e.g. 10 AM, 1 PM, 3:30 PM)"
+                "(e.g. 10 AM, 1 PM)"
             )
+
+        # Origin
+        if not state.origin:
+            return "Which city are you currently in / travelling from?"
         # Outbound travel mode
         if not state.outbound_mode:
             state.asked_outbound_mode = True

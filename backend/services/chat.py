@@ -564,45 +564,47 @@ class ChatService:
     # ── Suggestion helpers ────────────────────────────────────────────────────
 
     def _gathering_suggestions(self, state):
-        print("INSIDE _gathering_suggestions")
-        print(state.to_dict())
 
-        if not state.origin:
+        question = _gatherer.next_question(state)
+
+        print("QUESTION :", question)
+
+        if question and "destination city" in question.lower():
             return [
-                "Ahmedabad",
-                "Mumbai",
-                "Delhi",
-                "Bangalore",
-            ]
-
-        if not state.destination:
-
-            cities = [
                 "Delhi",
                 "Mumbai",
                 "Bangalore",
-                "Hyderabad",
                 "Ahmedabad",
-                "Pune",
-                "Chennai",
-                "Goa",
             ]
 
-            if state.origin:
-                cities = [
-                    c for c in cities
-                    if c.lower() != state.origin.lower()
-                ]
+        if question and "outbound journey" in question.lower():
+            return [
+                "Today",
+                "Tomorrow",
+                "11 July",
+                "12 July",
+            ]
 
-            return cities[:4]
-        if not state.meeting_time:
+        if question and "meeting" in question.lower():
             return [
                 "9 AM",
                 "10 AM",
                 "1 PM",
                 "3 PM",
             ]
-        if not state.outbound_mode:
+
+        if question and (
+            "currently in" in question.lower()
+            or "travelling from" in question.lower()
+        ):
+            return [
+                "Ahmedabad",
+                "Mumbai",
+                "Delhi",
+                "Bangalore",
+            ]
+
+        if question and "prefer to travel" in question.lower():
             return [
                 "Flight",
                 "Train",
@@ -610,7 +612,7 @@ class ChatService:
                 "Car",
             ]
 
-        if not state.trip_type:
+        if question and "one-way" in question.lower():
             return [
                 "One-way",
                 "Round trip",
